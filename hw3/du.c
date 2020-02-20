@@ -20,7 +20,7 @@
 #include <dirent.h> // directory entry
 #include <errno.h> // for errno
 
-#define MEMO_START_CAPACITY 10
+#define MEMO_START_CAPACITY 1
 
 typedef struct inode_memo {
     ino_t* inodeArray;
@@ -41,7 +41,6 @@ int findINode(inode_memo* memo, ino_t key)
     {
         // Will always occur initially since the first append for memo will actually
         // allocate space for inodeArray
-        fprintf(stderr, "findInode(): inodeArray in inode_memo is NULL\n");
         return -1;
     }
 
@@ -233,10 +232,13 @@ blkcnt_t diskUsage(char* dir, inode_memo* memo)
         lstat(dirEntry->d_name, &statbuf);
 
         // ignore "." and ".." directory entries
-        if(strcmp(".",dirEntry->d_name) == 0 || strcmp("..",dirEntry->d_name) == 0)
+        if(strcmp(".",dirEntry->d_name) == 0)
         {
-            printf("COUNTING . and ..\n");
             totalBlocksUsed += statbuf.st_blocks;
+            continue;
+        }
+        else if(strcmp("..",dirEntry->d_name) == 0)
+        {
             continue;
         }
 
@@ -262,9 +264,15 @@ blkcnt_t diskUsage(char* dir, inode_memo* memo)
         errno = 0;
     }
     //printf("COMING OUT\n");
-    printf("%ld        %s\n", totalBlocksUsed, dir);
+    printf("%ld\t%s\n", totalBlocksUsed, dir);
     // Return to original directory
     chdir("..");
+    // Close the directory
+    if(closedir(dirptr) == -1)
+    {
+        perror("Failed to close dir: ");
+        exit(EXIT_FAILURE);
+    }
 
     return totalBlocksUsed;
 }
@@ -301,19 +309,34 @@ blkcnt_t diskUsage2(char* dir, inode_memo* memo)
             exit(EXIT_FAILURE);
         }
 
+        // Checking if our pathname is potentially too long, 
+        // +2 = 1 for /, 1 for \0'
+        if((strlen(dir) + strlen(dirEntry->d_name) + 2) > PATH_MAX)
+        {
+            fprintf(stderr, "MAX PATHNAME LENGTH REACHED\n");
+            exit(EXIT_FAILURE);
+        }
+
         strcpy(pathname, dir);
         strcat(pathname, "/");
         strcat(pathname, dirEntry->d_name);
 
         // Get info on the inode
-        lstat(pathname, &statbuf);
+        if(lstat(pathname, &statbuf) == -1)
+        {
+            perror("Failed lstat(): ");
+            exit(EXIT_FAILURE);
+        }
 
         // ignore "." and ".." directory entries
-        if(strcmp(".", dirEntry->d_name) == 0 || strcmp("..",dirEntry->d_name) == 0)
+        if(strcmp(".", dirEntry->d_name) == 0)
         {
             // Count blocks for your current directory (also takes space)
-            if(strcmp(".", dirEntry->d_name) == 0)
-                totalBlocksUsed += statbuf.st_blocks;
+            totalBlocksUsed += statbuf.st_blocks;
+            continue;
+        } 
+        else if(strcmp("..",dirEntry->d_name) == 0)
+        {
             continue;
         }
 
@@ -323,7 +346,7 @@ blkcnt_t diskUsage2(char* dir, inode_memo* memo)
             // recurse into the directory
             totalBlocksUsed += diskUsage2(pathname, memo);
         }
-        else if(!(S_ISLNK(statbuf.st_mode))
+        else if(!(S_ISLNK(statbuf.st_mode)))
         {
             if(findINode(memo, statbuf.st_ino) == -1)
             {
@@ -337,7 +360,14 @@ blkcnt_t diskUsage2(char* dir, inode_memo* memo)
         errno = 0;
     }
 
-    printf("%ld        %s\n", totalBlocksUsed, dir);
+    printf("%ld\t%s\n", totalBlocksUsed, dir);
+
+    // Close the directory
+    if(closedir(dirptr) == -1)
+    {
+        perror("Failed to close dir: ");
+        exit(EXIT_FAILURE);
+    }
 
     return totalBlocksUsed;
 }
@@ -371,18 +401,25 @@ int main(int argc, char* argv[])
 
         // Remove the last '/' from input if it's there
         // (Strictly for formatting)
-        if (argv[1][strlen(argv[1])-1] == '/')
+        if (strcmp("/", argv[1]) != 0 && argv[1][strlen(argv[1])-1] == '/')
         {
             argv[1][strlen(argv[1])-1] = '\0';
         }
 
-        printf("%s\n", argv[1]);
         startDir = argv[1];
-        closedir(temp);
+
+        if(closedir(temp) == -1)
+        {
+            perror("Failed to close dir: ");
+            exit(EXIT_FAILURE);
+        }
     }
 
+    blkcnt_t totalBlockCount = diskUsage2(startDir, &memo);
 
-    printf("===== Final =====\n Blocks: %ld          Directory: %s\n", diskUsage2(startDir, &memo), startDir);
+    printf("\n\n===== FINAL RESULT =====\n");
+    printf("Directory: %s          Blocks: %ld\n", 
+                                     startDir, totalBlockCount);
     
     // if (stat(argv[1], &sb) == -1) {
     //     perror("stat");

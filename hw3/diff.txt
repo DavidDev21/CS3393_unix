@@ -1,0 +1,19 @@
+356,357d355
+< 8	/home/david/.dbus
+< 8	/home/david/.gvfs
+6084d6081
+< 8	/home/david/.cache/dconf
+6559d6555
+< 8	/home/david/.cache/doc
+6568c6564
+< 204752	/home/david/.cache
+---
+> 204736	/home/david/.cache
+9439c9435,9439
+< 2247943	/home/david/
+---
+> 2247911	/home/david
+> 
+> 
+> ===== FINAL RESULT =====
+> Directory: /home/david          Blocks: 2247911
