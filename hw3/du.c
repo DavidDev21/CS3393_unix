@@ -39,6 +39,8 @@ int findINode(inode_memo* memo, ino_t key)
     // Nothing to look through
     if(memo->inodeArray == NULL)
     {
+        // Will always occur initially since the first append for memo will actually
+        // allocate space for inodeArray
         fprintf(stderr, "findInode(): inodeArray in inode_memo is NULL\n");
         return -1;
     }
@@ -226,14 +228,17 @@ blkcnt_t diskUsage(char* dir, inode_memo* memo)
             perror("diskUsage() - error on readdir(): ");
             exit(EXIT_FAILURE);
         }
-        // ignore "." and ".." directory entries
-        if(strcmp(".",dirEntry->d_name) == 0 || strcmp("..",dirEntry->d_name) == 0)
-        {
-            continue;
-        }
 
         // Get info on the inode
         lstat(dirEntry->d_name, &statbuf);
+
+        // ignore "." and ".." directory entries
+        if(strcmp(".",dirEntry->d_name) == 0 || strcmp("..",dirEntry->d_name) == 0)
+        {
+            printf("COUNTING . and ..\n");
+            totalBlocksUsed += statbuf.st_blocks;
+            continue;
+        }
 
         // Check if dirEntry is an directory or regular file
         if(S_ISDIR(statbuf.st_mode))
@@ -242,13 +247,13 @@ blkcnt_t diskUsage(char* dir, inode_memo* memo)
             // recurse into the directory
             totalBlocksUsed += diskUsage(dirEntry->d_name, memo);
         }
-        else if(S_ISREG(statbuf.st_mode))
+        else if(!(S_ISLNK(statbuf.st_mode)))
         {
             if(findINode(memo, statbuf.st_ino) == -1)
             {
                 appendInode(memo, statbuf.st_ino);
 
-                printf("%s : %s : %ld\n" , dir, dirEntry->d_name, statbuf.st_blocks);
+                //printf("%s : %ld\n" , dirEntry->d_name, statbuf.st_blocks);
                 totalBlocksUsed += statbuf.st_blocks;
             }
         }
@@ -257,9 +262,82 @@ blkcnt_t diskUsage(char* dir, inode_memo* memo)
         errno = 0;
     }
     //printf("COMING OUT\n");
-    printf("%ld        %s/\n", totalBlocksUsed, dir);
+    printf("%ld        %s\n", totalBlocksUsed, dir);
     // Return to original directory
     chdir("..");
+
+    return totalBlocksUsed;
+}
+
+// Version two of disk usage without chdir
+blkcnt_t diskUsage2(char* dir, inode_memo* memo)
+{
+    DIR* dirptr;
+    struct dirent* dirEntry;
+    struct stat statbuf;
+
+    blkcnt_t totalBlocksUsed = 0;
+
+    char pathname[PATH_MAX];
+
+    // try to open the dir
+    dirptr = opendir(dir);
+
+    // If we can't open the directory, 
+    // we just return 0 since we can't get any info about it
+    if(dirptr == NULL)
+    {
+        fprintf(stderr,"cannot open directory: %s\n", dir);
+        return 0;
+    }
+
+    errno = 0;
+    while((dirEntry = readdir(dirptr)) != NULL)
+    {
+        // In case readdir() failed
+        if(errno != 0)
+        {
+            perror("diskUsage() - error on readdir(): ");
+            exit(EXIT_FAILURE);
+        }
+
+        strcpy(pathname, dir);
+        strcat(pathname, "/");
+        strcat(pathname, dirEntry->d_name);
+
+        // Get info on the inode
+        lstat(pathname, &statbuf);
+
+        // ignore "." and ".." directory entries
+        if(strcmp(".", dirEntry->d_name) == 0 || strcmp("..",dirEntry->d_name) == 0)
+        {
+            // Count blocks for your current directory (also takes space)
+            if(strcmp(".", dirEntry->d_name) == 0)
+                totalBlocksUsed += statbuf.st_blocks;
+            continue;
+        }
+
+        // Check if dirEntry is an directory or regular file
+        if(S_ISDIR(statbuf.st_mode))
+        {
+            // recurse into the directory
+            totalBlocksUsed += diskUsage2(pathname, memo);
+        }
+        else if(!(S_ISLNK(statbuf.st_mode))
+        {
+            if(findINode(memo, statbuf.st_ino) == -1)
+            {
+                appendInode(memo, statbuf.st_ino);
+
+                //printf("%s : %s : %ld\n" , dir, dirEntry->d_name, statbuf.st_blocks);
+                totalBlocksUsed += statbuf.st_blocks;
+            }
+        }
+        // reset errno for readdir() error checking
+        errno = 0;
+    }
+
+    printf("%ld        %s\n", totalBlocksUsed, dir);
 
     return totalBlocksUsed;
 }
@@ -267,7 +345,7 @@ blkcnt_t diskUsage(char* dir, inode_memo* memo)
 int main(int argc, char* argv[])
 {
     if (argc > 2) {
-        fprintf(stderr, "Usage: %s <pathname>\n", argv[0]);
+        fprintf(stderr, "Usage: %s [directory]\n", argv[0]);
         exit(EXIT_FAILURE);
     }
     //struct stat sb;
@@ -281,10 +359,30 @@ int main(int argc, char* argv[])
     memo.capacity = 0;
 
     if (argc == 2) {
+        // Check if it is a directory
+        DIR* temp = opendir(argv[1]);
+
+        // If not a directory, we exit.
+        if(temp == NULL)
+        {
+            fprintf(stderr, "%s : is not a directory\n", argv[1]);
+            exit(EXIT_FAILURE);
+        }
+
+        // Remove the last '/' from input if it's there
+        // (Strictly for formatting)
+        if (argv[1][strlen(argv[1])-1] == '/')
+        {
+            argv[1][strlen(argv[1])-1] = '\0';
+        }
+
+        printf("%s\n", argv[1]);
         startDir = argv[1];
+        closedir(temp);
     }
 
-    printf("%ld %s\n", diskUsage(startDir, &memo), startDir);
+
+    printf("===== Final =====\n Blocks: %ld          Directory: %s\n", diskUsage2(startDir, &memo), startDir);
     
     // if (stat(argv[1], &sb) == -1) {
     //     perror("stat");
