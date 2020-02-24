@@ -1,8 +1,8 @@
 /*
     Name: David Zheng
     CS 3393 
-    Homework Assignment #3 - DU (disk usage)
-    Due Date: TBD
+    Homework Assignment #3 - DU (disk usage) - Heap Version
+    Due Date: Feb 26
 */
 #define _GNU_SOURCE
 
@@ -24,10 +24,11 @@
 
 typedef struct inode_memo {
     ino_t* inodeArray;
-    int length;
-    int capacity;
+    size_t length;
+    size_t capacity;
 } inode_memo;
 
+// Find the inode in the memo
 int findINode(inode_memo* memo, ino_t key)
 {
     if(memo == NULL)
@@ -55,6 +56,7 @@ int findINode(inode_memo* memo, ino_t key)
     return -1;
 }
 
+// Adds an inode number to the memo for tracking
 int appendInode(inode_memo* memo, ino_t inodeNum)
 {
     if(memo == NULL)
@@ -98,187 +100,92 @@ int appendInode(inode_memo* memo, ino_t inodeNum)
     return 0;
 }
 
-/*
-           struct stat {
-               dev_t     st_dev;          ID of device containing file 
-               ino_t     st_ino;          Inode number 
-               mode_t    st_mode;         File type and mode 
-               nlink_t   st_nlink;        Number of hard links 
-               uid_t     st_uid;          User ID of owner 
-               gid_t     st_gid;          Group ID of owner 
-               dev_t     st_rdev;         Device ID (if special file) 
-               off_t     st_size;         Total size, in bytes 
-               blksize_t st_blksize;      Block size for filesystem I/O 
-               blkcnt_t  st_blocks;       Number of 512B blocks allocated 
-*/
+// Tools for dynamic pathname
+typedef struct dynamicPath{
+    char* charArray;
+    size_t length;
+    size_t capacity;
+} dynamicPath;
 
-// Prints out sb data
-void printFileStat(struct stat* sb)
+// Adds the filename string to the end of pathname
+int appendPath(dynamicPath* pathname, char* filename)
 {
-    printf("I-node number:            %ld\n", (long) sb->st_ino);
-
-    printf("File type:                ");
-
-    switch (sb->st_mode & S_IFMT) {
-    case S_IFBLK:  printf("block device\n");            break;
-    case S_IFCHR:  printf("character device\n");        break;
-    case S_IFDIR:  printf("directory\n");               break;
-    case S_IFIFO:  printf("FIFO/pipe\n");               break;
-    case S_IFLNK:  printf("symlink\n");                 break;
-    case S_IFREG:  printf("regular file\n");            break;
-    case S_IFSOCK: printf("socket\n");                  break;
-    default:       printf("unknown?\n");                break;
-    }
-
-    printf("Mode:                     %lo (octal)\n",
-            (unsigned long) sb->st_mode);
-
-    printf("Link count:               %ld\n", (long) sb->st_nlink);
-    printf("Ownership:                UID=%ld   GID=%ld\n",
-            (long) sb->st_uid, (long) sb->st_gid);
-
-    printf("Preferred I/O block size: %ld bytes\n",
-            (long) sb->st_blksize);
-    printf("File size:                %lld bytes\n",
-            (long long) sb->st_size);
-    printf("Blocks allocated:         %lld\n",
-            (long long) sb->st_blocks);
-}
-
-void printdir(char *dir, int depth)
-{
-    DIR *dp;
-    struct dirent *entry;
-    struct stat statbuf;
-    int spaces = depth*4;
-
-    if((dp = opendir(dir)) == NULL) {
-        fprintf(stderr,"cannot open directory: %s\n", dir);
-        return;
-    }
-    //chdir(dir);
-       char cwd[PATH_MAX];
-   if (getcwd(cwd, sizeof(cwd)) != NULL) {
-       printf("Current working dir: %s\n", cwd);
-   } else {
-       perror("getcwd() error");
-       return;
-   }
-
-   /*
-        Why we need to chdir into the dir we opened
-        - when we are doing lstat on a given directory entry for dir
-        - lstat is doing a relative lookup for that path given by directory entry
-        - since d_name is just the directoy / file name
-        - Therefore, if we dont change directory of the process to the one we are looking
-        - through the directory table. Then lstat would return us an empty statbuf.
-        - Since it can't find the file or directory in teh current working directory.
-   */
-    while((entry = readdir(dp)) != NULL) {
-        printf("LOOKING AT: %s\n", entry->d_name);
-        lstat(entry->d_name,&statbuf);
-        printFileStat(&statbuf);
-        if(S_ISDIR(statbuf.st_mode)) {
-            /* Found a directory, but ignore . and .. */
-            if(strcmp(".",entry->d_name) == 0 || 
-                strcmp("..",entry->d_name) == 0)
-                continue;
-            printf("%*s%s/\n",spaces,"",entry->d_name);
-            /* Recurse at a new indent level */
-            printf("RECURSIVING\n");
-            printdir(entry->d_name,depth+1);
-            printf("COMING BACK\n");
-        }
-        else printf("%*s%s\n",spaces,"",entry->d_name);
-    }
-    chdir("..");
-    closedir(dp);
-}
-
-blkcnt_t diskUsage(char* dir, inode_memo* memo)
-{
-    DIR* dirptr;
-    struct dirent* dirEntry;
-    struct stat statbuf;
-
-    blkcnt_t totalBlocksUsed = 0;
-
-    // try to open the dir
-    dirptr = opendir(dir);
-
-    // If we can't open the directory, 
-    // we just return 0 since we can't get any info about it
-    if(dirptr == NULL)
+    if(pathname == NULL)
     {
-        fprintf(stderr,"cannot open directory: %s\n", dir);
-        return 0;
+        fprintf(stderr, "appendPath(): pathname is NULL\n");
+        return -1;
     }
-    
-    // Change current working directory
-    // For lstat() to work properly with relative pathnames
-    chdir(dir);
 
-    errno = 0;
-    while((dirEntry = readdir(dirptr)) != NULL)
+    size_t filenameLen = strlen(filename);
+
+    // Initialize if NULL
+    if(pathname->charArray == NULL)
     {
-        // In case readdir() failed
-        if(errno != 0)
+        char* temp = malloc((filenameLen + 1) * sizeof(char));
+        if(temp == NULL)
         {
-            perror("diskUsage() - error on readdir(): ");
+            perror("AppendPath(): ");
             exit(EXIT_FAILURE);
         }
 
-        // Get info on the inode
-        lstat(dirEntry->d_name, &statbuf);
-
-        // ignore "." and ".." directory entries
-        if(strcmp(".",dirEntry->d_name) == 0)
-        {
-            totalBlocksUsed += statbuf.st_blocks;
-            continue;
-        }
-        else if(strcmp("..",dirEntry->d_name) == 0)
-        {
-            continue;
-        }
-
-        // Check if dirEntry is an directory or regular file
-        if(S_ISDIR(statbuf.st_mode))
-        {
-            //printf("GOING IN DEEP\n");
-            // recurse into the directory
-            totalBlocksUsed += diskUsage(dirEntry->d_name, memo);
-        }
-        else if(!(S_ISLNK(statbuf.st_mode)))
-        {
-            if(findINode(memo, statbuf.st_ino) == -1)
-            {
-                appendInode(memo, statbuf.st_ino);
-
-                //printf("%s : %ld\n" , dirEntry->d_name, statbuf.st_blocks);
-                totalBlocksUsed += statbuf.st_blocks;
-            }
-        }
-
-        // reset errno for readdir() error checking
-        errno = 0;
+        pathname->charArray = temp;
+        pathname->charArray[0] = '\0'; //null terminate
+        pathname->length = 0;
+        pathname->capacity = filenameLen + 1;
     }
-    //printf("COMING OUT\n");
-    printf("%ld\t%s\n", totalBlocksUsed, dir);
-    // Return to original directory
-    chdir("..");
-    // Close the directory
-    if(closedir(dirptr) == -1)
+
+    // Resize if needed
+    // +1 for null char
+    if((pathname->length + filenameLen + 1) >= pathname->capacity)
     {
-        perror("Failed to close dir: ");
-        exit(EXIT_FAILURE);
+        char* temp = realloc(pathname->charArray, (filenameLen + 1) + (2 * pathname->capacity * sizeof(char)));
+        if(temp == NULL)
+        {
+            perror("AppendPath(): ");
+            exit(EXIT_FAILURE);
+        }
+
+        pathname->charArray = temp;
+        pathname->capacity = ((filenameLen + 1) + 2 * pathname->capacity);
     }
 
-    return totalBlocksUsed;
+    // concat path
+    // pathname->charArray will always be null terminated
+    // since any manipulation to the charArray is either through strcat() or 
+    // inserting '\0' manually
+    strcat(pathname->charArray, filename);
+    pathname->length += filenameLen;
+
+    return 0;
 }
 
-// Version two of disk usage without chdir
-blkcnt_t diskUsage2(char* dir, inode_memo* memo)
+// Shrinks by pathname by one level
+int shrinkPath(dynamicPath* pathname)
+{
+    if(pathname == NULL)
+    {
+        return -1;
+    }
+
+    // minus one for null char
+    size_t i = pathname->length-1;
+
+    // Find the first from the end '/'
+    while(i > 0 && pathname->charArray[i] != '/')
+    {
+        i--;
+    }
+
+    // Put null char at the '/' location to "shrink"
+    pathname->charArray[i] = '\0';
+    pathname->length = i;
+
+    return 0;
+}
+
+
+// Version 3 with malloc for pathname
+blkcnt_t diskUsage(dynamicPath* dir, inode_memo* memo)
 {
     DIR* dirptr;
     struct dirent* dirEntry;
@@ -286,16 +193,22 @@ blkcnt_t diskUsage2(char* dir, inode_memo* memo)
 
     blkcnt_t totalBlocksUsed = 0;
 
-    char pathname[PATH_MAX];
+    // Special case: the initial directory we are traversing is /
+    // main() removes the first trailing '/' from the end of path
+    // Otherwise, dir would never be 0 initially, or reach 0
+    if(dir->length == 0)
+    {
+        appendPath(dir, "/");
+    }
 
     // try to open the dir
-    dirptr = opendir(dir);
+    dirptr = opendir(dir->charArray);
 
     // If we can't open the directory, 
     // we just return 0 since we can't get any info about it
     if(dirptr == NULL)
     {
-        fprintf(stderr,"cannot open directory: %s\n", dir);
+        fprintf(stderr,"cannot open directory: %s\n", dir->charArray);
         return 0;
     }
 
@@ -309,20 +222,17 @@ blkcnt_t diskUsage2(char* dir, inode_memo* memo)
             exit(EXIT_FAILURE);
         }
 
-        // Checking if our pathname is potentially too long, 
-        // +2 = 1 for /, 1 for \0'
-        if((strlen(dir) + strlen(dirEntry->d_name) + 2) > PATH_MAX)
+        // No point in adding '/' if it already has a '/' at the end
+        // The check should be pretty quick and not that costly
+        if(dir->charArray[dir->length-1] != '/')
         {
-            fprintf(stderr, "MAX PATHNAME LENGTH REACHED\n");
-            exit(EXIT_FAILURE);
+            appendPath(dir, "/");
         }
 
-        strcpy(pathname, dir);
-        strcat(pathname, "/");
-        strcat(pathname, dirEntry->d_name);
+        appendPath(dir, dirEntry->d_name);
 
         // Get info on the inode
-        if(lstat(pathname, &statbuf) == -1)
+        if(lstat(dir->charArray, &statbuf) == -1)
         {
             perror("Failed lstat(): ");
             exit(EXIT_FAILURE);
@@ -332,11 +242,13 @@ blkcnt_t diskUsage2(char* dir, inode_memo* memo)
         if(strcmp(".", dirEntry->d_name) == 0)
         {
             // Count blocks for your current directory (also takes space)
-            totalBlocksUsed += statbuf.st_blocks;
+            totalBlocksUsed += (statbuf.st_blocks / 2);
+            shrinkPath(dir);
             continue;
         } 
         else if(strcmp("..",dirEntry->d_name) == 0)
         {
+            shrinkPath(dir);
             continue;
         }
 
@@ -344,23 +256,35 @@ blkcnt_t diskUsage2(char* dir, inode_memo* memo)
         if(S_ISDIR(statbuf.st_mode))
         {
             // recurse into the directory
-            totalBlocksUsed += diskUsage2(pathname, memo);
+            totalBlocksUsed += diskUsage(dir, memo);
         }
-        else if(!(S_ISLNK(statbuf.st_mode)))
+        else
         {
             if(findINode(memo, statbuf.st_ino) == -1)
             {
                 appendInode(memo, statbuf.st_ino);
 
-                //printf("%s : %s : %ld\n" , dir, dirEntry->d_name, statbuf.st_blocks);
-                totalBlocksUsed += statbuf.st_blocks;
+                totalBlocksUsed += (statbuf.st_blocks / 2);
             }
         }
         // reset errno for readdir() error checking
         errno = 0;
+        shrinkPath(dir);
+
     }
 
-    printf("%ld\t%s\n", totalBlocksUsed, dir);
+    // Special case: the initial directory we are traversing is /
+    // main() removes the first trailing '/' from the end of path
+
+    // shrink() ends up clearing the whole path in cases where its
+    // "/<some_string>", since it inserts '\0' at the first occurence of /
+    // This is strictly for output expectations when running '/' as directory
+    if(dir->length == 0)
+    {
+        appendPath(dir, "/");
+    }
+
+    printf("%ld\t%s\n", totalBlocksUsed, dir->charArray);
 
     // Close the directory
     if(closedir(dirptr) == -1)
@@ -369,8 +293,10 @@ blkcnt_t diskUsage2(char* dir, inode_memo* memo)
         exit(EXIT_FAILURE);
     }
 
+    //printf("After Shrink, end of call: %s\n", dir->charArray);
     return totalBlocksUsed;
 }
+
 
 int main(int argc, char* argv[])
 {
@@ -378,15 +304,18 @@ int main(int argc, char* argv[])
         fprintf(stderr, "Usage: %s [directory]\n", argv[0]);
         exit(EXIT_FAILURE);
     }
-    //struct stat sb;
 
-    char* startDir = ".";
+    dynamicPath startDir;
     inode_memo memo; // for tracking inode numbers we have encountered
     
     // Zero out
     memo.inodeArray = NULL;
     memo.length = 0;
     memo.capacity = 0;
+
+    startDir.charArray = NULL;
+    startDir.length = 0;
+    startDir.capacity = 0;
 
     if (argc == 2) {
         // Check if it is a directory
@@ -399,39 +328,57 @@ int main(int argc, char* argv[])
             exit(EXIT_FAILURE);
         }
 
-        // Remove the last '/' from input if it's there
-        // (Strictly for formatting)
-        if (strcmp("/", argv[1]) != 0 && argv[1][strlen(argv[1])-1] == '/')
-        {
-            argv[1][strlen(argv[1])-1] = '\0';
-        }
-
-        startDir = argv[1];
-
+        // close the directory
         if(closedir(temp) == -1)
         {
             perror("Failed to close dir: ");
             exit(EXIT_FAILURE);
         }
+
+        // Format the argument to not have a trailing '/'
+        // This makes shrinking our pathname easier and cleaner
+        size_t dirLength = strlen(argv[1]);
+
+        startDir.charArray = malloc((dirLength + 2) * sizeof(char));
+        startDir.capacity = dirLength + 2;
+
+        if(startDir.charArray == NULL)
+        {
+            perror("Failed malloc(): ");
+            exit(EXIT_FAILURE);
+        }
+
+        startDir.charArray[0] = '\0';
+        strcat(startDir.charArray, argv[1]);
+        startDir.length = dirLength;
+
+        // Get rid of the trailing /
+        if (argv[1][dirLength-1] == '/')
+        {
+            startDir.charArray[dirLength-1] = '\0';
+            startDir.length--;
+        }
+    }
+    else // default if no path given by user
+    {
+        startDir.charArray = malloc(2 * sizeof(char));
+        startDir.capacity = 2;
+
+        if(startDir.charArray == NULL)
+        {
+            perror("Failed malloc(): ");
+            exit(EXIT_FAILURE);
+        }
+
+        startDir.charArray[0] = '\0';
+        strcat(startDir.charArray, ".");
+        startDir.length = 1;
     }
 
-    blkcnt_t totalBlockCount = diskUsage2(startDir, &memo);
+    diskUsage(&startDir, &memo);
 
-    printf("\n\n===== FINAL RESULT =====\n");
-    printf("Directory: %s          Blocks: %ld\n", 
-                                     startDir, totalBlockCount);
-    
-    // if (stat(argv[1], &sb) == -1) {
-    //     perror("stat");
-    //     exit(EXIT_FAILURE);
-    // }
-    // printf("%d", S_IFMT);
-    // printFileStat(&sb);
-
-    // printf("==================\n\n");
-
-    //printdir(argv[1],0);
-
+    free(memo.inodeArray);
+    free(startDir.charArray);
 
     return 0;
 }
