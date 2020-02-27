@@ -149,6 +149,8 @@ int main()
             // }
             // printf("\n");
 
+            // IO Redirection must happen here before fork()
+
             // Now we fork and exec on the command
 
             pid_t cpid = fork();
