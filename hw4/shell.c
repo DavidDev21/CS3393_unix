@@ -191,11 +191,11 @@ int builtin(char* cmd, char** argv)
 // and if it is an error, it will print the error and jump back to the start
 // of the shell. reprompting the user for the new command.
 // We assume something went wrong and just have the user reissue their command
-void errorCheck(int errorCode)
+void errorCheck(int errorCode, char* message)
 {
     if(errorCode < 0)
     {
-       perror("shell:");
+       fprintf(stderr, "shell: %s: %s\n", message, strerror(errno));
        siglongjmp(resetPrompt, errno);
     }
 }
@@ -240,7 +240,7 @@ void IORedirect(dynamic_array* argv)
             }
 
             // Checks if any error occur during open()
-            errorCheck(fd);
+            errorCheck(fd, argv->array[i+1]);
 
             // redirect
             if (strcmp(argv->array[i], "<") == 0)
