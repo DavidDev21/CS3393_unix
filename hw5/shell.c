@@ -1,7 +1,7 @@
 /*
     Name: David Zheng
     CS 3393 
-    Homework Assignment #4 - Basic Shell
+    Homework Assignment #5 - Shell (Enhanced)
     Due Date: 
 */
 
@@ -423,6 +423,69 @@ void executeCMD(char* command, char** args)
     }
 }
 
+// returns an array with the arguments that are separated into sets
+// that were delimited by |
+// We are passed a copy of the tokenized argv, so we don't destory the original
+
+// Result: returns a char*** which represents
+// distinct sets of commands that are separated by | 
+// Ex: argv = "ls | cat --help"
+// pipeized(argv) == [[ls],[cat, --help]]
+// If there is no pipe, there should just be one set
+// WARNING: THIS WILL MODIFY ARGV AND POSSIBLY DESTORY THE VALIDITY OF ITS FIELDS
+char*** pipeized(dynamic_array* argv)
+{
+    if(argv == NULL || argv->array == NULL || argv->length <= 0)
+    {
+        fprintf(stderr, "No valid argv is passed\n");
+        return NULL;
+    }
+    if(strcmp(argv->array[0],"|") == 0 || strcmp(argv->array[argv->length-1],"|") == 0)
+    {
+        fprintf(stderr, "Not enough parameters for piping\n");
+        return NULL;
+    }
+
+    // Sets of commands that are delimited by |
+    size_t numSets = 1; // should at least have one set, even without pipe
+
+    char*** pipeizedArgv = NULL;
+    size_t length = 1;
+    size_t capacity = 2;
+
+    pipeizedArgv = malloc(capacity * sizeof(char**));
+    checkNull(pipeizedArgv, "failed to malloc in pipeized");
+
+    pipeizedArgv[0] = argv->array;
+    pipeizedArgv[1] = '\0';
+
+    for(size_t i = 0; i < argv->length; i++)
+    {
+        if(length == capacity)
+        {
+            pipeizedArgv = realloc(pipeizedArgv, (2*capacity)* sizeof(char**));
+            checkNull(pipeizedArgv, "realloc failed in pipeized");
+            capacity *= 2;
+        }
+        if(strcmp(argv->array[i], "|") == 0)
+        {
+            argv->array[i] = '\0';
+            pipeizedArgv[numSets] = &(argv->array[i+1]);
+            numSets++;
+            pipeizedArgv[numSets] = '\0';
+            length++;
+        }
+    }
+
+    printf("PIPE LEGTH: %d\n", length);
+    printf("LASD: %d\n", numSets);
+
+    pipeizedArgv[length] = NULL;
+
+    return pipeizedArgv;
+
+}
+
 int main()
 {
     // initialize structs for sigaction
@@ -433,6 +496,7 @@ int main()
 
     char* input = NULL;
     char* prompt = NULL;
+    char*** pipeizedArray = NULL;
     size_t inputSize = 0;
 
     // A duplicate copy of the original set of std in, out, error
@@ -462,6 +526,7 @@ int main()
     while(1)
     {
         numChild = 0;
+        free(pipeizedArray);
         // Reset std in, out, err upon coming back to do prompt
         // Initially wouldn't really have any affect
         errorCheck(dup2(stdin_copy, 0), "dup2(stdin_copy, 0)", 0);
@@ -487,7 +552,27 @@ int main()
             }
 
             clearArray(&argv);
+
             parseInput(input, &argv);
+            pipeizedArray = pipeized(&argv);
+
+            // Argv here is completely destoryed
+            // Use pipeizedArray from this point on, Even if there is no piping
+            // The input would be in pipeizedArray[0] (tokenzed by argv)
+
+            //printf("%s\n", pipeizedArray[1][1]);
+            
+            for(char*** ptr = pipeizedArray; *ptr != NULL; ptr++)
+            {
+                printf("SET ====\n");
+
+                for(char** n = *ptr; *n != NULL; n++)
+                {
+                    printf("%s\n", *n);
+                }
+            }
+
+            continue;
 
             IORedirect(&argv);
 

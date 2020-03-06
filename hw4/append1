@@ -1,5 +1,5 @@
-OUTPUT2.0))))))))
-HELOOOOOASPDOASPDOASPDLWPENQIVOVXCVAWE
+This is a test for the append
+should not overwrite
 # Makefile for hw4
 
 all: hw4

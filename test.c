@@ -20,13 +20,20 @@ int main()
         printf("%s\n", test[i]);
     }
 
-    test = realloc(test, 10);
+    // test = realloc(test, 10);
 
-    test[7] = "test";
-    for(int i = 0; test[i] != NULL; i++)
-    {
-        printf("%s\n", test[i]);
-    }
+    // test[7] = "test";
+    // for(int i = 0; test[i] != NULL; i++)
+    // {
+    //     printf("%s\n", test[i]);
+    // }
 
+    char** maybe = malloc(1 * sizeof(char*));
+
+    maybe[0] = (char*) test;
+
+    printf("TEST: %s", maybe[0]);
+
+    free(test);
     return 0;
 }
