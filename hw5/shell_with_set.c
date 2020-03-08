@@ -61,8 +61,8 @@ int appendToken(args_array* dest, char* token);
 int popToken(args_array* argv, size_t index);
 int builtin(char* cmd, char** argv);
 int appendArgsSet(args_array_set* dest, args_array* item);
-int parseInput(char* userInput, args_array_set* result);
 
+args_array_set* parseInput(char* userInput);
 args_array* createArgsArray(char* argString);
 
 // Some global structs for sigaction. static to limit the visibility.
@@ -105,7 +105,7 @@ void handleSIG(int sig)
 // Frees everything in args_array_set, (not free target)
 void clearArgsSet(args_array_set* target)
 {
-    if(target->array != NULL && target->length >= 0)
+    if(target != NULL)
     {
         printf("ClearSET() TargetLength: %ld\n", target->length);
         for(size_t i = 0; i < target->length; i++)
@@ -335,23 +335,23 @@ int popToken(args_array* argv, size_t index)
 
 // Parses through the input string from stdin
 // tokenizes it and adds it to our dynamic array representing argv
-int parseInput(char* userInput, args_array_set* result)
+args_array_set* parseInput(char* userInput)
 {
     if(userInput == NULL || 
         strlen(userInput) == 0 || 
             strcmp(userInput, "\n") == 0)
     {
         fprintf(stderr, "parseInput(): userInput is NULL or empty\n");
-        return -1;
+        return NULL;
     }
 
     // Delimiter list
     const char* delim = "|\n";
 
-    // args_array_set* result = malloc(sizeof(args_array_set));
-    // result->array = NULL;
-    // result->length = 0;
-    // result->capacity = 0;
+    args_array_set* result = malloc(sizeof(args_array_set));
+    result->array = NULL;
+    result->length = 0;
+    result->capacity = 0;
 
     size_t inputLen = strlen(userInput);
 
@@ -393,19 +393,7 @@ int parseInput(char* userInput, args_array_set* result)
 
     printf("PraseInput() result len: %ld\n", result->length);
 
-    for(size_t i = 0; i < result->length; i++)
-    {
-        printf("\nSet %ld\n", i);
-        printf("\nargSet: %ld\n", result->array[i]->length);
-        for(size_t j = 0; j < result->array[i]->length; j++)
-        {
-            // array[i] is a argArray struct which also has array of char**
-            printf("%s ", result->array[i]->array[j]);
-        }
-    }
-
-
-    return 0;
+    return result;
 }
 
 // Checks through a list of commands that the shell should be doing
@@ -760,7 +748,7 @@ char*** pipeized(args_array* argv)
 
 int main()
 {
-    args_array_set argSet = {array: NULL, length: 0, capacity: 0};
+    // args_array_set argSet = {array: NULL, length: 0, capacity: 0};
     // args_array argv = {array: NULL, length: 0, capacity: 0};
 
     char* input = NULL;
@@ -768,7 +756,7 @@ int main()
     char*** pipeizedArray = NULL;
     size_t inputSize = 0;
 
-    // args_array_set* argSet = NULL;
+    args_array_set* argSet = NULL;
 
     // A duplicate copy of the original set of std in, out, error
     // Used to recover or reset after IORedirection
@@ -804,9 +792,9 @@ int main()
         errorCheck(dup2(stdout_copy, 1), "dup2(stdout_copy, 1)", 0);
         errorCheck(dup2(stderr_copy, 2), "dup2(stderr_cpy, 2)", 0);
 
-        clearArgsSet(&argSet);
-        // free(argSet);
-        // argSet = NULL;
+        clearArgsSet(argSet);
+        free(argSet);
+        argSet = NULL;
 
 
         prompt = getenv("PS1"); // if provided
@@ -828,20 +816,18 @@ int main()
                 continue;
             }
 
-            parseInput(input, &argSet);
-
-            // printf("NEW ARGSET LEN: %ld\n", argSet.length);
-
-            // for(size_t i = 0; i < argSet.length; i++)
-            // {
-            //     printf("\nSet %ld\n", i);
-            //     printf("\nargSet: %ld\n", argSet.array[i]->length);
-            //     for(size_t j = 0; j < argSet.array[i]->length; j++)
-            //     {
-            //         // array[i] is a argArray struct which also has array of char**
-            //         printf("%s ", argSet.array[i]->array[j]);
-            //     }
-            // }
+            argSet = parseInput(input);
+            printf("NEW ARGSET LEN: %ld\n", argSet->length);
+            for(size_t i = 0; i < argSet->length; i++)
+            {
+                printf("\nSet %ld\n", i);
+                printf("\nargSet: %ld\n", argSet->array[i]->length);
+                for(size_t j = 0; j < argSet->array[i]->length; j++)
+                {
+                    // array[i] is a argArray struct which also has array of char**
+                    printf("%s ", argSet->array[i]->array[j]);
+                }
+            }
 
             // pipeizedArray = pipeized(&argv);
 
@@ -871,21 +857,21 @@ int main()
 
             // executePIPE(pipeizedArray, 2);
 
-            //continue;
+            continue;
 
-            IORedirect(argSet.array[0]);
+            // IORedirect(&argv);
 
-            // command and args for exec() later
-            char* command = argSet.array[0]->array[0];
-            char** args = argSet.array[0]->array;
+            // // command and args for exec() later
+            // char* command = argv.array[0];
+            // char** args = argv.array;
 
-            // run the command and re prompt the user
-            if(builtin(command, args) > 0)
-            {
-                continue;
-            }
+            // // run the command and re prompt the user
+            // if(builtin(command, args) > 0)
+            // {
+            //     continue;
+            // }
 
-            executeCMD(command, args);
+            // executeCMD(command, args);
 
         } 
         else
@@ -896,8 +882,8 @@ int main()
 
     // Reality: never reaches here
     free(input);
-    clearArgsSet(&argSet);
-    free(argSet.array);
+    clearArgsSet(argSet);
+    free(argSet);
     close(stdin_copy);
     close(stdout_copy);
     close(stderr_copy);

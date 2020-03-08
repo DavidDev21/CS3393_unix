@@ -45,11 +45,20 @@ void clearArray(dynamic_array* target);
 void errorCheck(int errorCode, char* message, int restart);
 void IORedirect(dynamic_array* argv);
 void executeCMD(char* command, char** args);
+void handleSIG(int sig);
+void setSimpleDeposition(int depo);
 
 int appendToken(dynamic_array* dest, char* token);
 int popToken(dynamic_array* argv, size_t index);
 int parseInput(char* userInput, dynamic_array* argv);
 int builtin(char* cmd, char** argv);
+
+// Some global structs for sigaction. static to limit the visibility.
+static struct sigaction default_act = {.sa_handler= SIG_DFL};
+static struct sigaction ignore_act = {.sa_handler= SIG_IGN};
+static struct sigaction sigint_act = {.sa_handler= handleSIG, 
+                                .sa_flags = SA_RESTART};
+
 
 // Signal handlers
 void handleSIG(int sig)
@@ -387,28 +396,55 @@ void printChildStatus(int status)
     }
 }
 
+
+// Function to set the deposition for sigint, sigquit
+// allows us to make changes to the deposition easier.
+void setSimpleDeposition(int depo)
+{
+    if(depo == 0)
+    {
+        // setting to default deposition
+        errorCheck(sigaction(SIGINT, &default_act, NULL), "sigaction()", 0);
+        errorCheck(sigaction(SIGQUIT, &default_act, NULL), "sigaction()", 0);
+    }
+    else if(depo == 1)
+    {
+        // setting to ignore deposition
+        errorCheck(sigaction(SIGINT, &ignore_act, NULL), "sigaction()", 0);
+        errorCheck(sigaction(SIGQUIT, &ignore_act, NULL), "sigaction()", 0);
+    }
+    else if(depo == 2)
+    {
+        // setting to catch deposition
+        errorCheck(sigaction(SIGINT, &sigint_act, NULL), "sigaction()", 0);
+        errorCheck(sigaction(SIGQUIT, &sigint_act, NULL), "sigaction()", 0);
+    }
+}
+
+
 // creates child process to execute the given command
 void executeCMD(char* command, char** args)
 {
     int status = 0;
-    struct sigaction default_act = {.sa_handler= SIG_DFL};
 
+    // ignore signals while we setup. avoids potential race condition
+    setSimpleDeposition(1);
     // Now we fork and exec on the command
     pid_t cpid = fork();
-
     // Parent
     if (cpid > 0)
     {
-        numChild = 1; // inform potential signal handler that we have a child
+        // inform potential signal handler that we have a potential child
+        numChild = 1;
+        setSimpleDeposition(2);
         wait(&status);
         printChildStatus(status);
     } 
     // Child
     else if (cpid == 0)
     {
-        // Resetting SIGINT to default deposition
-        errorCheck(sigaction(SIGINT, &default_act, NULL), "sigaction()", 0);
-        errorCheck(sigaction(SIGQUIT, &default_act, NULL), "sigaction()", 0);
+        // Reset to default deposition
+        setSimpleDeposition(0);
 
         if(execvp(command, args) == -1)
         {
@@ -419,15 +455,14 @@ void executeCMD(char* command, char** args)
     }
     else
     {
+        // Set back to signal handler
+        setSimpleDeposition(2);
         perror("Fork() Failed: ");
     }
 }
 
 int main()
 {
-    // initialize structs for sigaction
-    struct sigaction sigint_act = {.sa_handler= handleSIG, 
-                                    .sa_flags = SA_RESTART};
 
     dynamic_array argv = {array: NULL, length: 0, capacity: 0};
 
@@ -451,8 +486,7 @@ int main()
     }
 
     // Set diposition fro both SIGINT and SIGQUIT
-    errorCheck(sigaction(SIGINT, &sigint_act, NULL), "main() sigaction", 0);
-    errorCheck(sigaction(SIGQUIT, &sigint_act, NULL), "main() sigaction", 0);
+    setSimpleDeposition(2);
 
     // Setup for long jump in case of an error in the shell
     sigsetjmp(resetPrompt, 1);

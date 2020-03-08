@@ -1,0 +1,62 @@
+
+
+// Realloc
+- This is a feature for memory allocation that C++ does not have.
+- Realloc() will first check if there is enough free continuous memory blocks at the end of the buffer
+    you passed in for reallocation. If there is enough space at the end of the buffer / currently allocated memory
+    to expand (based on how much expansion you wanted), then it will simply give you those blocks and there is no need for 
+    copying. Your old pointer stays the same
+
+- Otherwise, if there is not enough space to just expand, then it will deallocate the old blocks, give you new blocks of memory
+    and copy over the contents of the old block of memory to the new ones. 
+
+- If the size you indicate is actually smaller than your current buffer, things that happen depend on implementation
+    1.) It could just free up everything after the new size, meaning your original pointer stays the same
+    2.) It frees up your entire old memory blocks and gives you a new smaller memory blocks and copy whatever it could over.
+
+    Note: realloc to size 0 is the basically free() but not reliable since behaviro depends on implementation.
+
+
+// Function pointers
+To declare a function pointer in a functiond defintion
+
+void foo (char (*funct) (int, int))
+
+- foo() would take in a function pointer / a function, that returns a char, and takes in two ints.
+- foo() itself can reference or use the function based on what is (*<name>) is. 
+- Example: in foo(), you can say (*funct)(2,3), or funct(2,3) // both are valid, first one is just official.
+- Warning: *funct(2,3) // this doesn't acutally do the same as (*funct)(2,3). It deferences the return of funct(2,3).
+
+No pass by reference.
+You need to explictly put void in the input parameters of a function defintion, to make sure the compiler
+doesn't let you compile if you try to call the function with input. Otherwise, it will let shit compile even if you didnt ask for inputs
+
+- with implict declarations (using functions before definitions), C compiler assumes the function has a int return type.
+
+- static keyword limits the scope of something to just be the local source file. Meaning other files wont be able to see 
+    the variable or definition of a function. So you can have two static functions called foo() in two different files, 
+    and there would be no conflict when linking them.
+
+// extern
+- Declaration: just stating but no actual memory has be declared for it.
+    Ex: function prototypes are a declaration since we are stating that the definition is somewhere else.
+- defintion: Actual memory is allocated for something. Declaration is a subset of definition
+    Ex: function defintions, or just defining a variable.
+
+all function definitions implictly have extern keyword in front of them. The extern keyword increases the scope of 
+the function to the entire program.
+
+"With the declaration of the function in place, the compiler knows the definition of the function 
+exists somewhere else and it goes ahead and compiles the file"
+
+--- With variables
+- EX: extern int var;
+
+    In this case, var is just a declaration because the extern is saying that we defined var somewhere else, either in the current program file,
+        or some other file we might have included.
+
+- EX: int var;
+    This case, its both declaration and definition (just as with functions), var has memory allocated to it, regardless of the value.
+
+- The reason why extern char** environ doesn't have to be defined in our own program file, is because it is defined somewhere else like stdlib
+- 

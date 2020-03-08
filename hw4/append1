@@ -9,3 +9,4 @@ hw4:
 
 clean:
 	rm a.out
+	

@@ -1,0 +1,19 @@
+
+
+// notes
+
+IO redirection works strictly on files or streams for a command
+
+Why cmd 2> <file> > <file> doesn't redirect both STDERR and STDOUT to <file>?
+where <file> is the same
+
+- because it's effectively two separate IO redirections being done, which means
+    we open the same file with open() at two separate instances. leading to two different entries
+    on the system wide open file table for the same inode or file, each with different file offsets
+    So when the cmd tries to print to the two streams or files, there is a race condition.
+    And since the offsets are the same, they are always probably gonna write over each other.
+
+    This is in sharp contrast to doing an open() on one instance and dup2() twice, one for stderr, one for STDOUT
+    dup2() would make a copy of the fd on the process file descriptor table, but both the copy and the original
+    would point to the same entry on the system wide open file table, which means same shared same offset and no way
+    of writing over each other.
