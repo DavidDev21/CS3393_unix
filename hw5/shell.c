@@ -856,12 +856,7 @@ void setupPipeChain(args_array_set* argSet)
             char** args = argSet->array[i]->array;
 
             // Exec()
-            if(execvp(command, args) == -1)
-            {
-                perror("Failed to exec() ");
-                printf("\n");
-                exit(EXIT_FAILURE);
-            }
+            errorCheck(execvp(command, args), "Failed to exec()", 0);
         }
         else if(forkPID > 0)
         {
@@ -890,12 +885,7 @@ void setupPipeChain(args_array_set* argSet)
     char** args = argSet->array[argSet->length-1]->array;
 
     // Exec()
-    if(execvp(command, args) == -1)
-    {
-        perror("Failed to exec() ");
-        printf("\n");
-        exit(EXIT_FAILURE);
-    }
+    errorCheck(execvp(command, args), "Failed to exec()", 0);
 }
 
 int main()
