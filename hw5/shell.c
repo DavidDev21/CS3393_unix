@@ -20,6 +20,7 @@
 #include <signal.h> // signals
 #include <setjmp.h> // sigsetjmp, siglongjmp
 #include <limits.h> // for PATH_MAX
+#include <ctype.h> // isspace()
 
 // For starting size of dynamic array
 #define START_CAPACITY 1
@@ -52,10 +53,11 @@ void checkNull(void* arrayPtr, const char* errorMsg);
 void clearArray(args_array* target);
 void errorCheck(int errorCode, char* message, int restart);
 void IORedirect(args_array* argv);
-void executeCMD(char* command, char** args);
+void executeCMD(args_array_set* argSet);
 void handleSIG(int sig);
 void setSimpleDeposition(int depo);
 void clearArgsSet(args_array_set* target);
+void setupPipeChain(args_array_set* argSet);
 
 int appendToken(args_array* dest, char* token);
 int popToken(args_array* argv, size_t index);
@@ -91,9 +93,9 @@ void handleSIG(int sig)
     while(numChild > 0)
     {
         childPid = wait(&status);
+        numChild--;
         printf("Child has returned with PID: %d\n", childPid);
         printChildStatus(status);
-        numChild--;
     }
 
     // restart the prompt
@@ -102,6 +104,7 @@ void handleSIG(int sig)
     // if we are jumping out of the signal handler
     siglongjmp(resetPrompt, -2);
 }
+
 // Frees everything in args_array_set, (not free target)
 void clearArgsSet(args_array_set* target)
 {
@@ -345,6 +348,33 @@ int parseInput(char* userInput, args_array_set* result)
         return -1;
     }
 
+    if(result == NULL)
+    {
+        fprintf(stderr, "parseInput(): args_array_set is NULL\n");
+        return -2;
+    }
+
+    // make sure we don't have pipe in the beginning or end
+    if(userInput[0] == '|')
+    {
+        fprintf(stderr, "Pipe syntax found at the beginning of userInput. Invalid\n");
+        return -3;
+    }
+
+    // The loop shouldn't even go beyond 3 or 2 characters of the string
+    for(size_t i = strlen(userInput) - 1; i >= 0; i--)
+    {
+        if(userInput[i] == '|')
+        {
+            fprintf(stderr, "Pipe syntax found at the end of userInput. Invalid\n");
+            return -3;
+        }
+        else if(isspace(userInput[i]) == 0)
+        {
+            break;
+        }
+    }
+
     // Delimiter list
     const char* delim = "|\n";
 
@@ -402,6 +432,7 @@ int parseInput(char* userInput, args_array_set* result)
             // array[i] is a argArray struct which also has array of char**
             printf("%s ", result->array[i]->array[j]);
         }
+        printf("\n");
     }
 
 
@@ -497,7 +528,7 @@ void IORedirect(args_array* argv)
             }
 
             // Checks if any error occur during open()
-            errorCheck(fd, argv->array[i+1], 1);
+            errorCheck(fd, argv->array[i+1], 0);
 
             // redirect
             // Working
@@ -505,6 +536,7 @@ void IORedirect(args_array* argv)
             {
                 // First dup fd into 0, and close 0 if open
                 errorCheck(dup2(fd, STDIN_FILENO), "IORedirect: dup2()", 0);
+                fprintf(stdin, "stdin test1\n");
             }
             // Working
             else if (strcmp(argv->array[i], ">>") == 0 || 
@@ -512,12 +544,14 @@ void IORedirect(args_array* argv)
             {
                 // First dup2 fd into 0
                 errorCheck(dup2(fd, STDOUT_FILENO), "IORedirect: dup2()", 0);
+                fprintf(stdout, "STDOUT TEST1\n");
             }
             // Working
             else if(strcmp(argv->array[i], "2>") == 0)
             {
                 // First dup2 fd into 2
                 errorCheck(dup2(fd, STDERR_FILENO),"IORedirect: dup2()", 0);
+                                fprintf(stderr, "STDERR TEST1\n");
             }
             // Working
             // Separating this into own if statement more readable
@@ -525,7 +559,9 @@ void IORedirect(args_array* argv)
             {
                 // First dup2 fd into 1 and 2
                 errorCheck(dup2(fd, STDOUT_FILENO), "IORedirect: dup2()", 0);
+                                fprintf(stdout, "STDOUT TEST2\n");
                 errorCheck(dup2(fd, STDERR_FILENO), "IORedirect: dup2()", 0);
+                                fprintf(stderr, "STDERR TEST2\n");
             }
             
             // Close the file we opened
@@ -564,46 +600,6 @@ void printChildStatus(int status)
         {
             printf("Child process generated a core dump\n");
         }
-    }
-}
-
-// creates child process to execute the given command
-void executeCMD(char* command, char** args)
-{
-    int status = 0;
-
-    // temp ignore signals while we setup
-    setSimpleDeposition(1);
-
-    // Now we fork and exec on the command
-    pid_t cpid = fork();
-
-    // Parent
-    if (cpid > 0)
-    {
-        numChild = 1; // inform potential signal handler that we have a child
-
-        setSimpleDeposition(2); // change back to original
-        wait(&status);
-        printChildStatus(status);
-    } 
-    // Child
-    else if (cpid == 0)
-    {
-        // Reset SIGINT, SIGQUIT to default deposition
-        setSimpleDeposition(0);
-
-        if(execvp(command, args) == -1)
-        {
-            perror("Failed to exec() ");
-            printf("\n");
-            exit(EXIT_FAILURE);
-        }
-    }
-    else
-    {
-        setSimpleDeposition(2); // change back to original
-        perror("Fork() Failed: ");
     }
 }
 
@@ -650,112 +646,256 @@ void setSimpleDeposition(int depo)
     }
 }
 
-// handles a single pipe
-void executePIPE(char*** commandSet, size_t numSet)
-{
-    int fd[2];
-    // Ignore signals temp while we setup children.
+// // handles a single pipe
+// void executePIPE(char*** commandSet, size_t numSet)
+// {
+//     int fd[2];
+//     // Ignore signals temp while we setup children.
 
-    setSimpleDeposition(1);
-    errorCheck(pipe(fd), "pipe()", 0);
+//     setSimpleDeposition(1);
+//     errorCheck(pipe(fd), "pipe()", 0);
 
-    // First child
-    if(fork() == 0)
-    {
-        // Reset to default
-        setSimpleDeposition(0);
+//     // First child
+//     if(fork() == 0)
+//     {
+//         // Reset to default
+//         setSimpleDeposition(0);
 
-        // Do any IO redirection for the set
-        IORedirect(commandSet[0]);
+//         // Do any IO redirection for the set
+//         IORedirect(commandSet[0]);
 
-        // Close the reading end
-        errorCheck(close(fd[0]), "close(fd[0])", 0);
-        // Redirect our stdout to the writing end
-        errorCheck(dup2(fd[1], STDOUT_FILENO), "dup2()", 0);
+//         // Close the reading end
+//         errorCheck(close(fd[0]), "close(fd[0])", 0);
+//         // Redirect our stdout to the writing end
+//         errorCheck(dup2(fd[1], STDOUT_FILENO), "dup2()", 0);
 
-        // exits if failed exec()
-        errorCheck(execvp(commandSet[0][0], commandSet[0]), "exec()", 0);
-    }
+//         // exits if failed exec()
+//         errorCheck(execvp(commandSet[0][0], commandSet[0]), "exec()", 0);
+//     }
 
-    // Second child
-    if(fork() == 0)
-    {
-        // Reset to default
-        setSimpleDeposition(0);
+//     // Second child
+//     if(fork() == 0)
+//     {
+//         // Reset to default
+//         setSimpleDeposition(0);
 
-        IORedirect(commandSet[0]);
+//         IORedirect(commandSet[0]);
     
-        // Close the writing end
-        errorCheck(close(fd[1]), "close(fd[1])", 0);
+//         // Close the writing end
+//         errorCheck(close(fd[1]), "close(fd[1])", 0);
 
-        errorCheck(dup2(fd[0], STDIN_FILENO), "dup2()", 0);
+//         errorCheck(dup2(fd[0], STDIN_FILENO), "dup2()", 0);
 
-        errorCheck(execvp(commandSet[1][0], commandSet[1]), "exec()", 0);
+//         errorCheck(execvp(commandSet[1][0], commandSet[1]), "exec()", 0);
+//     }
+
+//     // parent closes both ends to the pipe
+//     errorCheck(close(fd[0]), "close()", 0);
+//     errorCheck(close(fd[1]), "close()", 0);
+
+//     numChild = 2;
+//     // turn back on the signal handler
+//     setSimpleDeposition(2);
+//     groupWait(2);
+// }
+
+
+// creates child process to execute the given command
+void executeCMD(args_array_set* argSet)
+{
+    int status = 0;
+
+    if(argSet == NULL)
+    {
+        fprintf(stderr, "executeCMD(): argSet is NULL\n");
+        return;
     }
 
-    // parent closes both ends to the pipe
-    errorCheck(close(fd[0]), "close()", 0);
-    errorCheck(close(fd[1]), "close()", 0);
+    if(argSet-> length == 0)
+    {
+        fprintf(stderr, "executeCMD(): argSet has length 0. No Set\n");
+        return;
+    }
 
-    numChild = 2;
-    // turn back on the signal handler
-    setSimpleDeposition(2);
-    groupWait(2);
+    // temp ignore signals while we setup
+    setSimpleDeposition(1);
+
+    // Now we fork and exec on the command
+    pid_t cpid = fork();
+
+    // Parent
+    if (cpid > 0)
+    {
+        numChild = 1; // inform potential signal handler that we have a child
+
+        setSimpleDeposition(2); // change back to original
+        wait(&status);
+        printChildStatus(status);
+    } 
+    // Child
+    else if (cpid == 0)
+    {
+        // Reset SIGINT, SIGQUIT to default deposition
+        setSimpleDeposition(0);
+
+        // Do IO Redirection
+        IORedirect(argSet->array[0]);
+
+        // command and args for exec() later
+        char* command = argSet->array[0]->array[0];
+        char** args = argSet->array[0]->array;
+
+        if(execvp(command, args) == -1)
+        {
+            perror("Failed to exec() ");
+            printf("\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+    else
+    {
+        setSimpleDeposition(2); // change back to original
+        perror("Fork() Failed: ");
+    }
 }
 
-
-// returns an array with the arguments that are separated into sets
-// that were delimited by |
-// We are passed a copy of the tokenized argv, so we don't destory the original
-
-// Result: returns a char*** which represents
-// distinct sets of commands that are separated by | 
-// Ex: argv = "ls | cat --help"
-// pipeized(argv) == [[ls],[cat, --help]]
-// If there is no pipe, there should just be one set
-// WARNING: THIS WILL MODIFY ARGV AND POSSIBLY DESTORY THE VALIDITY OF ITS FIELDS
-char*** pipeized(args_array* argv)
+void executePIPE(args_array_set* argSet)
 {
-    if(argv == NULL || argv->array == NULL || argv->length <= 0)
+    // First we would like to fork as the shell, and have the child
+    // setup the piping for all the sets of commands in argSet
+    int status = 0;
+
+    if(argSet == NULL)
     {
-        fprintf(stderr, "No valid argv is passed\n");
-        return NULL;
+        fprintf(stderr, "executeCMD(): argSet is NULL\n");
+        return;
     }
-    if(strcmp(argv->array[0],"|") == 0 || strcmp(argv->array[argv->length-1],"|") == 0)
+
+    if(argSet-> length == 0)
     {
-        fprintf(stderr, "Not enough parameters for piping\n");
-        return NULL;
+        fprintf(stderr, "executeCMD(): argSet has length 0. No Set\n");
+        return;
     }
 
-    char*** pipeizedArgv = NULL;
-    size_t length = 1; // representing how many sets of commands we have
-    size_t capacity = 2; // we should at least have one set (without any pipes)
+    // temp ignore signals while we setup
+    setSimpleDeposition(1);
 
-    pipeizedArgv = malloc(capacity * sizeof(char**));
-    checkNull(pipeizedArgv, "failed to malloc in pipeized");
+    // Now we fork and exec on the command
+    pid_t cpid = fork();
 
-    pipeizedArgv[0] = argv->array;
-    pipeizedArgv[1] = NULL;
-
-    for(size_t i = 0; i < argv->length; i++)
+    // Parent
+    if (cpid > 0)
     {
-        if(length == capacity)
+        // inform potential signal handler that we have m
+        numChild = argSet->length; 
+
+        setSimpleDeposition(2); // change back to original
+        groupWait(numChild);
+    } 
+    // Child
+    else if (cpid == 0)
+    {
+        // Reset SIGINT, SIGQUIT to default deposition
+        setSimpleDeposition(0);
+
+        // Sets up the chain of pipes that we have
+        // By creating another child and connecting the child 
+        // to the pipes
+        setupPipeChain(argSet);
+    }
+    else
+    {
+        setSimpleDeposition(2); // change back to original
+        perror("Fork() Failed: ");
+    }
+}
+
+void setupPipeChain(args_array_set* argSet)
+{
+    int fd[2];
+    int previousIn = STDIN_FILENO;
+    int status = 0;
+    pid_t forkPID = 0;
+
+    // Steps 0: create a pipe, and a child
+    // Steps 1: remember the read end of the previous pipe
+    //      - if there is no previous pipe, then we are the first in the chain
+    //            thus, we read from stdin, and no changes needed to be made
+    // Steps 2: In the child, we dup2(previousIn, 0), so we that read from the pipe that was created before
+    // Steps 3: In the child, we dup2(fd[1], 1), so that we write to the write end of the pipe
+    // Steps 4: In the child, close(fd[1], fd[0], PreviousIn) given, that we no longer need them
+    //      - Note: PreviousIn in the current parent would still be open
+    // Steps 5: In the parent, close(previousIn and fd[1]) we remember fd[0] as the new previousIn, for the next child in the chain
+    // Steps 6: Repeat for n-1 sets
+    // Steps 7: we are the last set in the chain, dup2(previousIn, 0). exec(last set)
+
+    for(size_t i = 0; i < argSet->length-1; i++)
+    {
+        // Create pipe
+        errorCheck(pipe(fd), "failed to create pipe", 0);
+        // Fork a child
+        forkPID = fork();
+
+        if(forkPID == 0)
         {
-            pipeizedArgv = realloc(pipeizedArgv, (2*capacity)* sizeof(char**));
-            checkNull(pipeizedArgv, "realloc failed in pipeized");
-            capacity *= 2;
+            // Child redirects its stdin to be from previousIn
+            if(previousIn != 0)
+            {
+                dup2(previousIn, 0);
+            }
+            // Close unused fd
+            close(fd[0]);
+
+            // Redirect out to pipe write end
+            dup2(fd[1], 1);
+
+            close(fd[1]);
+
+            // command and args for exec() later
+            char* command = argSet->array[i]->array[0];
+            char** args = argSet->array[i]->array;
+
+            // Exec()
+            if(execvp(command, args) == -1)
+            {
+                perror("Failed to exec() ");
+                printf("\n");
+                exit(EXIT_FAILURE);
+            }
         }
-        if(strcmp(argv->array[i], "|") == 0)
+        else if(forkPID > 0)
         {
-            argv->array[i] = '\0';
-            pipeizedArgv[length] = &(argv->array[i+1]);
-            length++;
+            // Wait for the child to end or finish writing to the pipe
+            wait(&status);
+            printChildStatus(status);
+
+            // Close the write end on the parent
+            close(fd[1]);
+
+            // Parent remembers the previous read end for the next child in the chain
+            previousIn = fd[0];
+        }
+        else
+        {
+            perror("Failed fork");
+            exit(EXIT_FAILURE);
         }
     }
 
-    pipeizedArgv[length] = NULL;
+    // We should be the last one in the chain
+    // Read in from the last pipe
+    dup2(previousIn, 0);
 
-    return pipeizedArgv;
+    char* command = argSet->array[argSet->length-1]->array[0];
+    char** args = argSet->array[argSet->length-1]->array;
+
+    // Exec()
+    if(execvp(command, args) == -1)
+    {
+        perror("Failed to exec() ");
+        printf("\n");
+        exit(EXIT_FAILURE);
+    }
 }
 
 int main()
@@ -765,25 +905,7 @@ int main()
 
     char* input = NULL;
     char* prompt = NULL;
-    char*** pipeizedArray = NULL;
     size_t inputSize = 0;
-
-    // args_array_set* argSet = NULL;
-
-    // A duplicate copy of the original set of std in, out, error
-    // Used to recover or reset after IORedirection
-    // These copies should stay open. No real reason why they would be closed
-    // Strict purpose is to be able to recover the original std in, out, 
-    // and error
-    int stdin_copy = dup(0);
-    int stdout_copy = dup(1);
-    int stderr_copy = dup(2);
-
-    if(stdin_copy < 0 || stdout_copy < 0 || stderr_copy < 0)
-    {
-        perror("dup()");
-        exit(EXIT_FAILURE);
-    }
 
     // Set diposition fro both SIGINT and SIGQUIT
     setSimpleDeposition(2);
@@ -796,18 +918,6 @@ int main()
     while(1)
     {
         numChild = 0;
-        // free(pipeizedArray);
-        // pipeizedArray = NULL;
-        // Reset std in, out, err upon coming back to do prompt
-        // Initially wouldn't really have any affect
-        errorCheck(dup2(stdin_copy, 0), "dup2(stdin_copy, 0)", 0);
-        errorCheck(dup2(stdout_copy, 1), "dup2(stdout_copy, 1)", 0);
-        errorCheck(dup2(stderr_copy, 2), "dup2(stderr_cpy, 2)", 0);
-
-        clearArgsSet(&argSet);
-        // free(argSet);
-        // argSet = NULL;
-
 
         prompt = getenv("PS1"); // if provided
 
@@ -815,8 +925,9 @@ int main()
             prompt = ">$"; // else use this for prompt
         }
 
-        printf("\n%s ", prompt);
+        clearArgsSet(&argSet);
 
+        printf("\n%s ", prompt);
 
         // getline includes the \n if there is one
         // , which there will always be one from stdin
@@ -829,64 +940,28 @@ int main()
             }
 
             parseInput(input, &argSet);
-
-            // printf("NEW ARGSET LEN: %ld\n", argSet.length);
-
-            // for(size_t i = 0; i < argSet.length; i++)
-            // {
-            //     printf("\nSet %ld\n", i);
-            //     printf("\nargSet: %ld\n", argSet.array[i]->length);
-            //     for(size_t j = 0; j < argSet.array[i]->length; j++)
-            //     {
-            //         // array[i] is a argArray struct which also has array of char**
-            //         printf("%s ", argSet.array[i]->array[j]);
-            //     }
-            // }
-
-            // pipeizedArray = pipeized(&argv);
-
-            // Argv here is completely destoryed
-            // Use pipeizedArray from this point on, Even if there is no piping
-            // The input would be in pipeizedArray[0] (tokenzed by argv)
-
-            //printf("%s\n", pipeizedArray[1][1]);
-
-            // size_t numSet = 0;
-            
-            // for(char*** ptr = pipeizedArray; *ptr != NULL; ptr++)
-            // {
-            //     printf("SET ====\n");
-            //     numSet++;
-            //     for(char** n = *ptr; *n != NULL; n++)
-            //     {
-            //         printf("%s\n", *n);
-            //     }
-            // }
-
-            // // No piping involved
-            // if(numSet == 1)
-            // {
                 
-            // }
-
-            // executePIPE(pipeizedArray, 2);
-
-            //continue;
-
-            IORedirect(argSet.array[0]);
-
-            // command and args for exec() later
-            char* command = argSet.array[0]->array[0];
-            char** args = argSet.array[0]->array;
-
-            // run the command and re prompt the user
-            if(builtin(command, args) > 0)
+            printf("ARGSET IS WHAT: %ld\n", argSet.length);
+            if(argSet.length == 1)
             {
-                continue;
+                // command and args for exec() later
+                char* command = argSet.array[0]->array[0];
+                char** args = argSet.array[0]->array;
+
+                // run the command and re prompt the user
+                if(builtin(command, args) > 0)
+                {
+                    continue;
+                }
+
+                executeCMD(&argSet);
             }
+            else
+            {
+                printf("More than one set: %ld\n", argSet.length);
 
-            executeCMD(command, args);
-
+                executePIPE(&argSet);
+            }
         } 
         else
         {
@@ -898,8 +973,5 @@ int main()
     free(input);
     clearArgsSet(&argSet);
     free(argSet.array);
-    close(stdin_copy);
-    close(stdout_copy);
-    close(stderr_copy);
     return 0;
 }

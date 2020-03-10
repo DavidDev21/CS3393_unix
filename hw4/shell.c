@@ -2,7 +2,7 @@
     Name: David Zheng
     CS 3393 
     Homework Assignment #4 - Basic Shell
-    Due Date: 
+    Due Date: 3/10/2020
 */
 
 #define _GNU_SOURCE
@@ -44,7 +44,7 @@ void checkNull(void* arrayPtr, const char* errorMsg);
 void clearArray(dynamic_array* target);
 void errorCheck(int errorCode, char* message, int restart);
 void IORedirect(dynamic_array* argv);
-void executeCMD(char* command, char** args);
+void executeCMD(dynamic_array* argv);
 void handleSIG(int sig);
 void setSimpleDeposition(int depo);
 
@@ -111,6 +111,7 @@ void errorCheck(int errorCode, char* message, int restart)
        if(restart > 0)
        {
             siglongjmp(resetPrompt, errno);
+            return;
        } 
        else
        {
@@ -243,9 +244,10 @@ int parseInput(char* userInput, dynamic_array* argv)
 int builtin(char* cmd, char** argv)
 {
 	if (strcmp(cmd, "exit") == 0)
+    {
 		exit(0);
-
-	if (strcmp(cmd, "cd") == 0) {
+    }
+	else if (strcmp(cmd, "cd") == 0) {
         char* newDir = argv[1];
 
 		if (argv[1] == NULL) { // cd by itself
@@ -326,7 +328,7 @@ void IORedirect(dynamic_array* argv)
             }
 
             // Checks if any error occur during open()
-            errorCheck(fd, argv->array[i+1], 1);
+            errorCheck(fd, argv->array[i+1], 0);
 
             // redirect
             // Working
@@ -396,7 +398,6 @@ void printChildStatus(int status)
     }
 }
 
-
 // Function to set the deposition for sigint, sigquit
 // allows us to make changes to the deposition easier.
 void setSimpleDeposition(int depo)
@@ -421,11 +422,15 @@ void setSimpleDeposition(int depo)
     }
 }
 
-
 // creates child process to execute the given command
-void executeCMD(char* command, char** args)
+void executeCMD(dynamic_array* argv)
 {
     int status = 0;
+    if(argv == NULL)
+    {
+        fprintf(stderr, "executeCMD(): argv is NULL\n");
+        return;
+    }
 
     // ignore signals while we setup. avoids potential race condition
     setSimpleDeposition(1);
@@ -445,6 +450,12 @@ void executeCMD(char* command, char** args)
     {
         // Reset to default deposition
         setSimpleDeposition(0);
+
+        // Do IO Redirection in the child
+        IORedirect(argv);
+
+        char* command = argv->array[0];
+        char** args = argv->array;
 
         if(execvp(command, args) == -1)
         {
@@ -470,37 +481,17 @@ int main()
     char* prompt = NULL;
     size_t inputSize = 0;
 
-    // A duplicate copy of the original set of std in, out, error
-    // Used to recover or reset after IORedirection
-    // These copies should stay open. No real reason why they would be closed
-    // Strict purpose is to be able to recover the original std in, out, 
-    // and error
-    int stdin_copy = dup(0);
-    int stdout_copy = dup(1);
-    int stderr_copy = dup(2);
-
-    if(stdin_copy < 0 || stdout_copy < 0 || stderr_copy < 0)
-    {
-        perror("dup()");
-        exit(EXIT_FAILURE);
-    }
-
     // Set diposition fro both SIGINT and SIGQUIT
     setSimpleDeposition(2);
 
     // Setup for long jump in case of an error in the shell
     sigsetjmp(resetPrompt, 1);
-    jmpActive = 1;
+    jmpActive = 1; // inform signal handler setjmp() is active.
 
     // Get user input
     while(1)
     {
         numChild = 0;
-        // Reset std in, out, err upon coming back to do prompt
-        // Initially wouldn't really have any affect
-        errorCheck(dup2(stdin_copy, 0), "dup2(stdin_copy, 0)", 0);
-        errorCheck(dup2(stdout_copy, 1), "dup2(stdout_copy, 1)", 0);
-        errorCheck(dup2(stderr_copy, 2), "dup2(stderr_cpy, 2)", 0);
 
         prompt = getenv("PS1"); // if provided
 
@@ -523,20 +514,18 @@ int main()
             clearArray(&argv);
             parseInput(input, &argv);
 
-            IORedirect(&argv);
-
             // command and args for exec() later
             char* command = argv.array[0];
             char** args = argv.array;
 
-            // run the command and re prompt the user
+            // run the builtin command and re prompt the user
             if(builtin(command, args) > 0)
             {
                 continue;
             }
 
-            executeCMD(command, args);
-
+            // Otherwise, we fork a child, do any IO redirect, and exec()
+            executeCMD(&argv);
         } 
         else
         {
@@ -547,8 +536,5 @@ int main()
     // Reality: never reaches here
     free(input);
     free(argv.array);
-    close(stdin_copy);
-    close(stdout_copy);
-    close(stderr_copy);
     return 0;
 }

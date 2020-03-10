@@ -1,3 +1,10 @@
-hello
-this
-is the redirection just for output
+STDOUT TEST 1 (with append)
+# Makefile for hw4
+
+all: hw4
+
+hw4:
+	gcc shell.c -std=c99 -Wall
+
+clean:
+	rm a.out

@@ -1,3 +1,6 @@
+STDOUT TEST 2 (In &>)
+STDERR TEST 2 (In &>)
+STDOUT TEST 1 (with append)
 Usage: cat [OPTION]... [FILE]...
 Concatenate FILE(s) to standard output.
 
