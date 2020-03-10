@@ -362,6 +362,7 @@ int parseInput(char* userInput, args_array_set* result)
     }
 
     // The loop shouldn't even go beyond 3 or 2 characters of the string
+    // Checks for trailing pipes
     for(size_t i = strlen(userInput) - 1; i >= 0; i--)
     {
         if(userInput[i] == '|')
@@ -401,6 +402,23 @@ int parseInput(char* userInput, args_array_set* result)
         newLocation = newLocation + strlen(token) + 1; // + 1 for the null char
 
         printf("new location: %s\n", newLocation);
+
+        // Should check if we happen to have empty sets in pipe chain like
+        // ps aux |  | wc -l or ps aux ||| wc -l
+        for(char* i = newLocation; *i != '\0'; i++)
+        {
+            printf("INASDASDASD %c\n", *i);
+            if(*i != '|' && isspace(*i) == 0)
+            {
+                printf("Broke? %d ", isspace(*i) == 0);
+                break;
+            }
+            else if(*i == '|')
+            {
+                errno = 1;
+                errorCheck(-1, "ParseInput(): invalid pipe syntax", 1);
+            }
+        }
 
         args_array* temp = createArgsArray(token);
 
@@ -821,13 +839,13 @@ void setupPipeChain(args_array_set* argSet)
     // Steps 1: remember the read end of the previous pipe
     //      - if there is no previous pipe, then we are the first in the chain
     //            thus, we read from stdin, and no changes needed to be made
-    // Steps 2: In the child, we dup2(previousIn, 0), so we that read from the pipe that was created before
+    // Steps 2: In the child, we dup2(previousIn, 0), so we that read from the pipe that was created by parent
     // Steps 3: In the child, we dup2(fd[1], 1), so that we write to the write end of the pipe
     // Steps 4: In the child, close(fd[1], fd[0], PreviousIn) given, that we no longer need them
     //      - Note: PreviousIn in the current parent would still be open
     // Steps 5: In the parent, close(previousIn and fd[1]) we remember fd[0] as the new previousIn, for the next child in the chain
-    // Steps 6: Repeat for n-1 sets
-    // Steps 7: we are the last set in the chain, dup2(previousIn, 0). exec(last set)
+    // Steps 6: Repeat for n-1 sets since last set doesn't need to write to a pipe.
+    // Steps 7: we are the last set in the chain, only need to read from the last pipe, dup2(previousIn, 0). exec(last set)
 
     for(size_t i = 0; i < argSet->length-1; i++)
     {
@@ -842,6 +860,11 @@ void setupPipeChain(args_array_set* argSet)
             if(previousIn != 0)
             {
                 dup2(previousIn, 0);
+            }
+            // In case, we might want to read from somewhere else initially
+            else if(previousIn == 0)
+            {
+                IORedirect(argSet->array[i]);
             }
             // Close unused fd
             close(fd[0]);
@@ -860,12 +883,12 @@ void setupPipeChain(args_array_set* argSet)
         }
         else if(forkPID > 0)
         {
+            // Close the write end on the parent
+            close(fd[1]);
+
             // Wait for the child to end or finish writing to the pipe
             wait(&status);
             printChildStatus(status);
-
-            // Close the write end on the parent
-            close(fd[1]);
 
             // Parent remembers the previous read end for the next child in the chain
             previousIn = fd[0];
@@ -876,6 +899,9 @@ void setupPipeChain(args_array_set* argSet)
             exit(EXIT_FAILURE);
         }
     }
+
+    // In case, we want to redirect stdout
+    IORedirect(argSet->array[argSet->length-1]);
 
     // We should be the last one in the chain
     // Read in from the last pipe
@@ -902,6 +928,7 @@ int main()
 
     // Setup for long jump in case of an error in the shell
     sigsetjmp(resetPrompt, 1);
+    errno = 0;
     jmpActive = 1;
 
     // Get user input

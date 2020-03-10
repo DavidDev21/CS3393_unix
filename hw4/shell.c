@@ -481,12 +481,12 @@ int main()
     char* prompt = NULL;
     size_t inputSize = 0;
 
-    // Set diposition fro both SIGINT and SIGQUIT
-    setSimpleDeposition(2);
-
     // Setup for long jump in case of an error in the shell
     sigsetjmp(resetPrompt, 1);
     jmpActive = 1; // inform signal handler setjmp() is active.
+
+    // Set diposition fro both SIGINT and SIGQUIT
+    setSimpleDeposition(2);
 
     // Get user input
     while(1)
