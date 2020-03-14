@@ -3,7 +3,9 @@
 all: hw5
 
 hw5:
-	gcc shell.c -std=c99 -Wall
+	gcc client.c -o client -std=c99 -Wall
+	gcc server.c -o server -std=c99 -Wall
 
 clean:
-	rm a.out
+	rm client
+	rm server
