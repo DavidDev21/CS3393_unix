@@ -6,6 +6,9 @@
 */
 
 // SERVER
+#define _GNU_SOURCE
+// Needed for sigaction
+#define _POSIX_C_SOURCE
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,12 +19,13 @@
 #include <netinet/in.h>     // servaddr
 #include <sys/select.h>  // select, FD_ZERO, FD_SET, FD_ISSET
 #include <errno.h>
+#include <signal.h>
+#include <setjmp.h>
 
 // marcos
 #define LISTEN_BUFF 10 // for the queue size for listen()
 #define MSG_BUFF_SIZE 4096
 #define MAX_USERNAME_SIZE 1024
-
 
 // Usage: server <username> <optional port>
 
@@ -30,6 +34,21 @@
 // since these won't change really.
 static in_port_t SERVER_PORT=8920;
 static char USERNAME[MAX_USERNAME_SIZE];
+static volatile sig_atomic_t SIG_CAUGHT = 0;
+static volatile sig_atomic_t jmpActive = 0;
+
+sigjmp_buf TO_MAIN;
+
+// Signal handing SIGINT to do some cleanup
+void cleanupHandle(int signum)
+{
+    if(jmpActive == 0)
+    {
+        return;
+    }
+    SIG_CAUGHT = 1;
+    siglongjmp(TO_MAIN, 0);
+}
 
 void errorCheck(int errorCode, char* message)
 {
@@ -88,6 +107,7 @@ void addFDSet(int fd, fd_set* set)
 
 size_t writeMessage(const char* msg, int dest, int writeName)
 {
+    //printf("IN WRITEMESSAGE\n");
     char messageBuffer[MSG_BUFF_SIZE+1];
     size_t numWritten = 0;
     size_t msgLen = strlen(msg);
@@ -175,13 +195,16 @@ size_t sendMessage(int src, int dest, int writeName, int echo)
         exit(EXIT_FAILURE);
     }
 
+    //printf("NUMREAD: %ld\n", numRead);
     return numRead;
 }
 int main(int argc, char* argv[])
 {
+    struct sigaction socketCleaner = {.sa_handler = cleanupHandle, .sa_flags = SA_RESTART};
+
     parseInput(argc, argv);
 
-    printf("USERNAME: %s\n", USERNAME);
+    printf("USERNAME: %s\n", argv[2]);
     printf("PORT: %d\n", SERVER_PORT);
 
     // Setup the socket for server
@@ -217,14 +240,27 @@ int main(int argc, char* argv[])
     // Listen or become passive socket
     listen(serverSocket, LISTEN_BUFF);
 
+    errorCheck(sigaction(SIGINT, &socketCleaner, NULL), "sigaction");
+
+    sigsetjmp(TO_MAIN, 1);
+    jmpActive=1;
+
     // Enter infinite loop
     while(1)
     {
+        // Cleanup if we got signal
+        if(SIG_CAUGHT)
+        {
+            close(serverSocket);
+            printf("Shutting down server. Goodbye :)\n");
+            exit(EXIT_SUCCESS);
+        }
+
         struct sockaddr_in clientInfo = {0};
         socklen_t clientSize = sizeof(clientInfo);
         int connected = 0;
 
-        printf("Waiting for client\n");
+        printf("\nWaiting for client\n");
 
         clientConn = accept(serverSocket, (struct sockaddr*) &clientInfo, &clientSize);
 
@@ -234,11 +270,21 @@ int main(int argc, char* argv[])
 
         printf("Client Addr: %d\n", clientInfo.sin_addr.s_addr);
 
+        // Write out the initial message from the client
+        sendMessage(clientConn, STDOUT_FILENO, 0, 0);
+
+        // Why does it print out HELLO and ??? whenver we type into stdin
+        // But not when it just runs normally
         connected = 1;
 
-        writeMessage("Welcome User To My Sex Dungeon\n", clientConn, 1);
-        // printf("INIT STRLEN: %ld\n", strlen("Welcome User To My Sex Dungeon\n"));
+        // Why doesn't hello show up when you dont have newline
+        // Does not aply to line with Client addr at all.
+        //printf("HELLO");
 
+        writeMessage("Welcome user! Hopefully I can keep you sane.\n", clientConn, 1);
+        // printf("INIT STRLEN: %ld\n", strlen("Welcome User To My Sex Dungeon\n"));
+        
+        //printf("???");
         while(connected)
         {
             // fd set for select()
@@ -251,16 +297,18 @@ int main(int argc, char* argv[])
             addFDSet(STDIN_FILENO, &readSet);
             addFDSet(clientConn, &readSet);
             //addFDSet(clientSocket, &writeSet);
+            printf("\n>> ");
+            fflush(stdout);
 
             numReadyFD = select(maxFD, &readSet, NULL, NULL, NULL);
-
+            //printf("UNBLOCKED");
             // If stdin was ready
             if(FD_ISSET(STDIN_FILENO, &readSet))
             {
                 // printf("Can read from stdin\n");
 
                 // printf("===================================\n%s : ", USERNAME);
-                printf("\n\n");
+
                 sendMessage(STDIN_FILENO, clientConn, 1, 1);
             }
             // If there is something to read from server
@@ -269,10 +317,15 @@ int main(int argc, char* argv[])
                 //printf("Can read from clientSocket\n");
                 // send message from clientSocket to console
                 // EOF, client has exited in some fashion
+                printf("\r");
+                fflush(stdout);
+
                 if(sendMessage(clientConn, STDOUT_FILENO, 0, 0) == 0)
                 {
                     close(clientConn);
                     connected = 0;
+                    printf("Client has disconnected\n");
+                    printf("===============================\n\n");
                 }
             }
             if(numReadyFD < 0)
@@ -280,7 +333,6 @@ int main(int argc, char* argv[])
                 perror("select() Failed");
                 exit(EXIT_FAILURE);
             }
-
             //close(clientConn);
         }
     }

@@ -110,7 +110,7 @@ size_t writeMessage(const char* msg, int dest, int writeName)
     strcat(messageBuffer, msg);
     
     // Write it to dest
-    if((numWritten = write(dest, messageBuffer, msgLen)) !=  msgLen)
+    if((numWritten = write(dest, messageBuffer, strlen(messageBuffer))) !=  strlen(messageBuffer))
     {
         perror("writeMessage(): write failed: ");
         exit(EXIT_FAILURE);
@@ -182,7 +182,7 @@ int main(int argc, char* argv[])
 {
     parseInput(argc, argv);
 
-    printf("USERNAME: %s\n", USERNAME);
+    printf("USERNAME: %s\n", argv[2]);
     printf("PORT: %d\n", SERVER_PORT);
     printf("SERVER_ADDR: %s\n", SERVER_ADDR);
 
@@ -196,13 +196,22 @@ int main(int argc, char* argv[])
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(SERVER_PORT);
     
-    if(inet_pton(AF_INET, SERVER_ADDR, &serverAddr.sin_addr) <= 0 )
+    int inetErro;
+    if((inetErro = inet_pton(AF_INET, SERVER_ADDR, &serverAddr.sin_addr)) < 0 )
     {
         perror("inet_pton failed");
         exit(EXIT_FAILURE);
     }
+    else if(inetErro == 0)
+    {
+        fprintf(stderr, "%s is not a valid IPv4 Address\n", SERVER_ADDR);
+        exit(EXIT_FAILURE);
+    }
 
     errorCheck(connect(clientSocket, (struct sockaddr*) &serverAddr, sizeof(serverAddr)), "Connect Failed");
+
+    // State your name
+    writeMessage("has connected\n", clientSocket, 1);
 
     // fd set for select()
     fd_set readSet, writeSet;
@@ -225,6 +234,9 @@ int main(int argc, char* argv[])
         addFDSet(clientSocket, &readSet);
         //addFDSet(clientSocket, &writeSet);
 
+        printf("\n>> ");
+        fflush(stdout);
+
         numReadyFD = select(maxFD, &readSet, NULL, NULL, NULL);
         
         // printf("numReadyFD: %d\n", numReadyFD);
@@ -233,7 +245,6 @@ int main(int argc, char* argv[])
         if(FD_ISSET(STDIN_FILENO, &readSet))
         {
             //printf("Can read from stdin\n");
-            printf("\n\n");
             sendMessage(STDIN_FILENO, clientSocket, 1, 1);
         }
         // If there is something to read from server
@@ -241,6 +252,11 @@ int main(int argc, char* argv[])
         {
             //printf("Can read from clientSocket\n");
             // send message from clientSocket to console
+
+            // Reset the line to the beginning so we can write the output
+            printf("\r");
+            fflush(stdout);
+
             if(sendMessage(clientSocket, STDOUT_FILENO, 0, 0) == 0)
             {
                 printf("Lost connection to server\n");
