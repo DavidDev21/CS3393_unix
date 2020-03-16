@@ -5,61 +5,66 @@
 #include <string.h>
 #include <unistd.h>
 
+
 int main()
 {
-    char buf[10] = "h";
 
-    fprintf(stderr, "%d\n", strlen(buf));
+
+
+
+    // char buf[10] = "h";
+
+    // fprintf(stderr, "%d\n", strlen(buf));
    
-    fprintf(stderr, "%s\n", buf);
+    // fprintf(stderr, "%s\n", buf);
 
-    // // sprintf(), will fail if the buffer doesn't fit what you trying to write to
-    // sprintf(buf, "progss%d", 456);
+    // // // sprintf(), will fail if the buffer doesn't fit what you trying to write to
+    // // sprintf(buf, "progss%d", 456);
 
-    // printf("%s\n", buf);
+    // // printf("%s\n", buf);
 
-    for(int i = 0; i < 10; i++)
-    {
-        // sprintf is still the shorter way
-        // snprintf prevents buffer overflow
-        // n = n max bytes to write into buffer
-        // sprintf is portable for converting int to string
-        char test[10];
-        char num[3];
+    // for(int i = 0; i < 10; i++)
+    // {
+    //     // sprintf is still the shorter way
+    //     // snprintf prevents buffer overflow
+    //     // n = n max bytes to write into buffer
+    //     // sprintf is portable for converting int to string
+    //     char test[10];
+    //     char num[3];
 
-        snprintf(num, 3, "%d", i);
+    //     snprintf(num, 3, "%d", i);
 
-        strcpy(test, "prog");
-        strcat(test, num);
+    //     strcpy(test, "prog");
+    //     strcat(test, num);
 
-        printf("%s\n", test);
-    }
+    //     printf("%s\n", test);
+    // }
 
-    struct init{
-        int a;
-        char* b;
-    };
+    // struct init{
+    //     int a;
+    //     char* b;
+    // };
 
-    // zero out fields in a struct
-    struct init test2 = {0};
-    fprintf(stderr, "%d %d", test2.a, test2.b == NULL);
+    // // zero out fields in a struct
+    // struct init test2 = {0};
+    // fprintf(stderr, "%d %d", test2.a, test2.b == NULL);
 
-        for(int i = 0; i < 10; i++)
-    {
-        // sprintf is still the shorter way
-        // snprintf prevents buffer overflow
-        // n = n max bytes to write into buffer
-        // sprintf is portable for converting int to string
-        char test[10];
-        char num[3];
+    //     for(int i = 0; i < 10; i++)
+    // {
+    //     // sprintf is still the shorter way
+    //     // snprintf prevents buffer overflow
+    //     // n = n max bytes to write into buffer
+    //     // sprintf is portable for converting int to string
+    //     char test[10];
+    //     char num[3];
 
-        snprintf(num, 3, "%d", i);
+    //     snprintf(num, 3, "%d", i);
 
-        strcpy(test, "prog");
-        strcat(test, num);
+    //     strcpy(test, "prog");
+    //     strcat(test, num);
 
-        fprintf(stderr, "ERROR: %s\n", test);
-    }
+    //     fprintf(stderr, "ERROR: %s\n", test);
+    // }
 
 
 

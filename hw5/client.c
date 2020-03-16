@@ -22,7 +22,7 @@
 
 static in_port_t SERVER_PORT=8920; // Port that the server is listening on
 static const char* SERVER_ADDR = "127.0.0.1";
-static char USERNAME[MAX_USERNAME_SIZE];
+static char USERNAME[MAX_USERNAME_SIZE+3];
 
 void errorCheck(int errorCode, char* message)
 {
@@ -34,13 +34,15 @@ void errorCheck(int errorCode, char* message)
     }
 }
 
-// Parses through the command line and assigns the values corresponding to the expected input
+// Parses through the command line and 
+// assigns the values corresponding to the expected input
 void parseInput(int argc, char** argv)
 {
     if(argc < 2 || argc > 6)
     {
         // The order of the options dont matter
-        fprintf(stderr, "Usage: server <username> [-p for port, -s for server addr]\n");
+        fprintf(stderr, "Usage: server <username> [-p for port, \
+                                                -s for server addr]\n");
         exit(EXIT_FAILURE);
     }
 
@@ -50,10 +52,11 @@ void parseInput(int argc, char** argv)
         exit(EXIT_FAILURE);
     }
 
-    // + 3 for the " : ", + 1 for the Null terminate
-    memset(USERNAME, '\0', MAX_USERNAME_SIZE + 4);
+    // + 2 for the ": ", + 1 for the Null terminate
+    // Note: USERNAME fits: MAX_USERNAME_SIZE + 3
+    memset(USERNAME, '\0', sizeof(USERNAME));
     strcat(USERNAME, argv[1]);
-    strcat(USERNAME, " : ");
+    strcat(USERNAME, ": ");
 
     for(int i = 2; i < argc; i++)
     {
@@ -86,6 +89,8 @@ void addFDSet(int fd, fd_set* set)
     FD_SET(fd, set);
 }
 
+// Writes a message to a dest file descriptor (that can be socket)
+// writeName flag determines if you want to include your username in the message
 size_t writeMessage(const char* msg, int dest, int writeName)
 {
     char messageBuffer[MSG_BUFF_SIZE+1];
@@ -108,19 +113,22 @@ size_t writeMessage(const char* msg, int dest, int writeName)
 
     // Copy the message into the buffer
     strcat(messageBuffer, msg);
+
+    msgLen = strlen(messageBuffer);
     
     // Write it to dest
-    if((numWritten = write(dest, messageBuffer, strlen(messageBuffer))) !=  strlen(messageBuffer))
+    if((numWritten = write(dest, messageBuffer, msgLen)) !=  msgLen)
     {
         perror("writeMessage(): write failed: ");
         exit(EXIT_FAILURE);
     }
 
-    //printf("Num written: %ld\n", numWritten);
-
     return numWritten;
 }
 
+// Reads from src and writes the content from src fd to dest fd
+// writeName: to include the username or not (if src is from stdin)
+// echo: whether you want the result that was sent to dest, to be echoed to stdout
 size_t sendMessage(int src, int dest, int writeName, int echo)
 {
     char messageBuffer[MSG_BUFF_SIZE+1];
@@ -130,7 +138,6 @@ size_t sendMessage(int src, int dest, int writeName, int echo)
 
     if(echo > 0)
     {
-        //printf("ECHO TRUE\n");
         printf("%s", USERNAME);
     }
 
@@ -158,10 +165,6 @@ size_t sendMessage(int src, int dest, int writeName, int echo)
             printf("%s", messageBuffer);
         }
 
-        // printf("Message Buffer: %s\n", messageBuffer);
-        // printf("Message length: %ld VS %ld\n", strlen(messageBuffer), numRead);
-        // printf("Message at: %c\n", messageBuffer[numRead-2]);
-        // printf("True: %d\n", messageBuffer[numRead-2] == '\n');
         // If we ended with a newline, we are also done reading
         if(messageBuffer[strlen(messageBuffer)-1] == '\n')
         {
@@ -180,9 +183,10 @@ size_t sendMessage(int src, int dest, int writeName, int echo)
 
 int main(int argc, char* argv[])
 {
+    // Goes through the arguments and sets any changes to defaults
     parseInput(argc, argv);
 
-    printf("USERNAME: %s\n", argv[2]);
+    printf("USERNAME: %s\n", argv[1]);
     printf("PORT: %d\n", SERVER_PORT);
     printf("SERVER_ADDR: %s\n", SERVER_ADDR);
 
@@ -193,9 +197,11 @@ int main(int argc, char* argv[])
     clientSocket = socket(AF_INET, SOCK_STREAM, 0);
     errorCheck(clientSocket, "Failed to create socket:");
 
-    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_family = AF_INET; // connecting using an IPv4 Address
     serverAddr.sin_port = htons(SERVER_PORT);
     
+    // Attempt to convert the string to a network equal
+    // SERVER_ADDR should be of the expected string format that is valid IPv4
     int inetErro;
     if((inetErro = inet_pton(AF_INET, SERVER_ADDR, &serverAddr.sin_addr)) < 0 )
     {
@@ -208,52 +214,43 @@ int main(int argc, char* argv[])
         exit(EXIT_FAILURE);
     }
 
-    errorCheck(connect(clientSocket, (struct sockaddr*) &serverAddr, sizeof(serverAddr)), "Connect Failed");
+    // Attempt to connect
+    errorCheck(connect(clientSocket, (struct sockaddr*) &serverAddr, 
+                                        sizeof(serverAddr)), "Connect Failed");
 
     // State your name
     writeMessage("has connected\n", clientSocket, 1);
 
     // fd set for select()
-    fd_set readSet, writeSet;
+    fd_set readSet;
     int numReadyFD;
     int maxFD = clientSocket + 1;
-    int loopCount = 0;
 
     while(1)
     {
-        // if(loopCount >5)
-        // {
-        //     exit(0);
-        // }
-
-        // loopCount++;
         FD_ZERO(&readSet);
 
         // Initialize variables for select()
         addFDSet(STDIN_FILENO, &readSet);
         addFDSet(clientSocket, &readSet);
-        //addFDSet(clientSocket, &writeSet);
 
         printf("\n>> ");
         fflush(stdout);
 
         numReadyFD = select(maxFD, &readSet, NULL, NULL, NULL);
         
-        // printf("numReadyFD: %d\n", numReadyFD);
-        // printf("I am unblocked\n");
         // If stdin was ready
         if(FD_ISSET(STDIN_FILENO, &readSet))
         {
-            //printf("Can read from stdin\n");
             sendMessage(STDIN_FILENO, clientSocket, 1, 1);
         }
         // If there is something to read from server
         if(FD_ISSET(clientSocket, &readSet))
         {
-            //printf("Can read from clientSocket\n");
             // send message from clientSocket to console
-
-            // Reset the line to the beginning so we can write the output
+            // Reset the cursor to the beginning so we can write the output
+            // from server. 
+            // (We would be overwrite the >> that was there before select)
             printf("\r");
             fflush(stdout);
 
@@ -268,7 +265,6 @@ int main(int argc, char* argv[])
             perror("select() Failed");
             exit(EXIT_FAILURE);
         }
-
     }
 
     return 0;
