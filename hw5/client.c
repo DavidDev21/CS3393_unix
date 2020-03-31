@@ -2,10 +2,12 @@
     Name: David Zheng
     CS 3393 - Unix Systems Programming
     HW5: Two way chat
-    Due Date: April 1st, 2020
+    Due Date: March 31, 2020
 */
 
 // CLIENT
+#define _GNU_SOURCE
+#define _POSIX_C_SOURCE
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,8 +43,8 @@ void parseInput(int argc, char** argv)
     if(argc < 2 || argc > 6)
     {
         // The order of the options dont matter
-        fprintf(stderr, "Usage: server <username> [-p for port, \
-                                                -s for server addr]\n");
+        fprintf(stderr, "Usage: server <username> [-p for port, "
+                                                "-s for server addr]\n");
         exit(EXIT_FAILURE);
     }
 
@@ -82,11 +84,6 @@ void parseInput(int argc, char** argv)
             i++;
         }
     }
-}
-
-void addFDSet(int fd, fd_set* set)
-{
-    FD_SET(fd, set);
 }
 
 // Writes a message to a dest file descriptor (that can be socket)
@@ -129,7 +126,7 @@ size_t writeMessage(const char* msg, int dest, int writeName)
 // Reads from src and writes the content from src fd to dest fd
 // writeName: to include the username or not (if src is from stdin)
 // echo: whether you want the result that was sent to dest, to be echoed to stdout
-size_t sendMessage(int src, int dest, int writeName, int echo)
+size_t forwardMessage(int src, int dest, int writeName, int echo)
 {
     char messageBuffer[MSG_BUFF_SIZE+1];
     size_t numRead = 0;
@@ -158,7 +155,7 @@ size_t sendMessage(int src, int dest, int writeName, int echo)
         if(write(dest, messageBuffer, numRead+1) != numRead+1)
         {
             fprintf(stderr,"Write to fd=%d failed\n", dest);
-            exit(0);
+            exit(EXIT_FAILURE);
         }
         if(echo > 0)
         {
@@ -218,7 +215,8 @@ int main(int argc, char* argv[])
     errorCheck(connect(clientSocket, (struct sockaddr*) &serverAddr, 
                                         sizeof(serverAddr)), "Connect Failed");
 
-    // State your name
+    // State your name to the server (just for initial message)
+    // from the client
     writeMessage("has connected\n", clientSocket, 1);
 
     // fd set for select()
@@ -231,8 +229,8 @@ int main(int argc, char* argv[])
         FD_ZERO(&readSet);
 
         // Initialize variables for select()
-        addFDSet(STDIN_FILENO, &readSet);
-        addFDSet(clientSocket, &readSet);
+        FD_SET(STDIN_FILENO, &readSet);
+        FD_SET(clientSocket, &readSet);
 
         printf("\n>> ");
         fflush(stdout);
@@ -242,7 +240,7 @@ int main(int argc, char* argv[])
         // If stdin was ready
         if(FD_ISSET(STDIN_FILENO, &readSet))
         {
-            sendMessage(STDIN_FILENO, clientSocket, 1, 1);
+            forwardMessage(STDIN_FILENO, clientSocket, 1, 1);
         }
         // If there is something to read from server
         if(FD_ISSET(clientSocket, &readSet))
@@ -254,7 +252,7 @@ int main(int argc, char* argv[])
             printf("\r");
             fflush(stdout);
 
-            if(sendMessage(clientSocket, STDOUT_FILENO, 0, 0) == 0)
+            if(forwardMessage(clientSocket, STDOUT_FILENO, 0, 0) == 0)
             {
                 printf("Lost connection to server\n");
                 exit(EXIT_FAILURE);

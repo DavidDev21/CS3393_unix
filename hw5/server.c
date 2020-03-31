@@ -2,7 +2,7 @@
     Name: David Zheng
     CS 3393 - Unix Systems Programming
     HW5: Two way chat
-    Due Date: April 1st, 2020
+    Due Date: March 31, 2020
 */
 
 // SERVER
@@ -100,12 +100,12 @@ void parseInput(int argc, char** argv)
 
             i++;
         }
+        else
+        {
+            fprintf(stderr, "Unknown flag: %s\n", argv[i]);
+            exit(EXIT_FAILURE);
+        }
     }
-}
-
-void addFDSet(int fd, fd_set* set)
-{
-    FD_SET(fd, set);
 }
 
 // Writes a message to a dest file descriptor (that can be socket)
@@ -177,7 +177,7 @@ size_t forwardMessage(int src, int dest, int writeName, int echo)
         if(write(dest, messageBuffer, numRead+1) != numRead+1)
         {
             fprintf(stderr,"Write to fd=%d failed\n", dest);
-            exit(0);
+            exit(EXIT_FAILURE);
         }
         if(echo > 0)
         {
@@ -245,7 +245,7 @@ int main(int argc, char* argv[])
                 "Failed Bind(): ");
 
     // Listen or become passive socket
-    listen(serverSocket, LISTEN_BUFF);
+    errorCheck(listen(serverSocket, LISTEN_BUFF), "listen()");
 
     errorCheck(sigaction(SIGINT, &socketCleaner, NULL), "sigaction");
 
@@ -276,7 +276,15 @@ int main(int argc, char* argv[])
 
         printf("CLIENT CONNECTED\n\n");
 
-        printf("Client Addr: %d\n", clientInfo.sin_addr.s_addr);
+        char clientAddr[INET_ADDRSTRLEN];
+        if(inet_ntop(AF_INET, &clientInfo.sin_addr, clientAddr, 
+                                                INET_ADDRSTRLEN) == NULL)
+        {
+            perror("inet_ntop()");
+            exit(EXIT_FAILURE);
+        }
+
+        printf("Client Addr: %s\n", clientAddr);
 
         // Write out the initial message from the client
         // The client should be sending us who they are (Their username)
@@ -296,24 +304,30 @@ int main(int argc, char* argv[])
             int maxFD = clientConn + 1;
 
             // Initialize variables for select()
-            addFDSet(STDIN_FILENO, &readSet);
-            addFDSet(clientConn, &readSet);
+            FD_SET(STDIN_FILENO, &readSet);
+            FD_SET(clientConn, &readSet);
 
             printf("\n>> ");
             fflush(stdout);
 
+            // block for any IO from readSet. no timeout.
             numReadyFD = select(maxFD, &readSet, NULL, NULL, NULL);
 
             // If stdin was ready
             if(FD_ISSET(STDIN_FILENO, &readSet))
             {
+                // Send whatever we got from stdin through the socket
+                // Also echo whatever was sent to the console.
                 forwardMessage(STDIN_FILENO, clientConn, 1, 1);
             }
             // If there is something to read from server
             if(FD_ISSET(clientConn, &readSet))
             {
                 // send message from clientSocket to console
-                // EOF, client has exited in some fashion
+                
+                // reset the cursor to the beginning of the line
+                // Since we would have the prompt string if
+                // we were waiting for stdin.
                 printf("\r");
                 fflush(stdout);
 
@@ -325,6 +339,7 @@ int main(int argc, char* argv[])
                     printf("===============================\n\n");
                 }
             }
+            // Check if select failed
             if(numReadyFD < 0)
             {
                 perror("select() Failed");
