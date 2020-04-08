@@ -27,7 +27,7 @@
 #define LISTEN_BUFF 10 // for the queue size for listen()
 #define MSG_BUFF_SIZE 4096
 #define MAX_USERNAME_SIZE 1024
-#define MAX_CLIENT_NUM 1024
+#define MAX_CLIENT_NUM 1025
 #define MSG_QUEUE_SIZE 1024
 #define GREETING "Welcome User! Hopefully I can keep you sane. :)\n"
 
@@ -62,6 +62,7 @@ typedef struct{
     pthread_cond_t cond; // for if the queue is full
 } message_queue;
 
+// Should be global for easy accessibility between threads
 client_list userList;
 message_queue outMessages;
 
@@ -99,6 +100,7 @@ void errorCheck(int errorCode, char* message, int restart)
     }
 }
 
+// Functions for managing message queue
 // Adds given message to the queue
 char* enqueueMessage(char* message, client_info* sender)
 {
@@ -182,19 +184,75 @@ void* broadcastThread(void* args)
         pthread_mutex_lock(&(userList.lock));
 
         // Send the message out per client
-        for(size_t i = 0; i < userList.length; i++)
+        // userList[0] shall be reserved for server
+        for(size_t i = 1; i < userList.length; i++)
         {
+            // Note: we are also sending the message back to its sender
+            // This acts as an echo for the user who wrote the message
+            // and forces an ordering of the messages that is based on 
+            // how the server received them
             sendMessage(outboundMessage, userList.array[i].sockfd);
         }
 
         // Free up the message we just sent from the queue
+        // MUST HAVE THE LOCK to message queue
+        // We should remove it then signal that the queue has more space
+        // to the producer threads
         removeMessage();
 
+        pthread_cond_signal(&(outMessages.cond));
         pthread_mutex_unlock(&(userList.lock));
         pthread_mutex_unlock(&(outMessages.lock));
 
     }
 }
+
+// Functions for managing user list
+int addUser(client_info* newUser)
+{
+    if(newUser == NULL)
+    {
+        printf("addUser(): user is NULL\n");
+        exit(EXIT_FAILURE);
+    }
+
+    pthread_mutex_lock(&(userList.lock));
+
+    if(userList.length + 1 > MAX_CLIENT_NUM)
+    {
+        printf(stderr, "addUser(): No more room for new clients\n");
+        pthread_mutex_unlock(&(userList.lock));
+        return -1;
+    }
+    
+    for(size_t i = 1; i < MAX_CLIENT_NUM; i++)
+    {
+        // Empty slot
+        if(userList.array[i] == NULL)
+        {
+            userList.array[i]  = newUser;
+            userList.length++;
+            newUser->id = i; // each position is a unique user
+            break;
+        }
+    }
+
+    // Announce who joined to the room
+    char* serverMsg = (char*) malloc(MSG_BUFF_SIZE);
+    checkNull(serverMsg, "Failed malloc()");
+
+    memset(serverMsg, '\0', MSG_BUFF_SIZE);
+    strcat(serverMsg, newUser->username);
+    strcat(serverMsg, "has joined the room\n");
+
+    // Note: array[0] is reserved for the server
+    enqueueMessage(serverMsg, userList.array[0]);
+
+    pthread_mutex_unlock(&(userList.lock));
+    return 0;
+}
+
+int removeUser()
 
 sigjmp_buf TO_MAIN;
 
