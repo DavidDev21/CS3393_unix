@@ -216,7 +216,7 @@ int main(int argc, char* argv[])
 
     // State your name to the server (just for initial message)
     // from the client
-    writeMessage("has connected\n", clientSocket, 1);
+    writeMessage("", clientSocket, 1);
 
     // fd set for select()
     fd_set readSet;
@@ -243,13 +243,20 @@ int main(int argc, char* argv[])
         {
             if(getline(&input, &inputSize, stdin) != -1)
             {
-                writeMessage(input, clientSocket, 1);
-
-                if(strcmp(input, "QUIT\n") == 0)
+                if(strlen(input) >= MSG_BUFF_SIZE)
                 {
-                    printf("Exiting Client\n");
-                    free(input);
-                    exit(0);
+                    fprintf(stderr, "input is too long\n");
+                }
+                else
+                {
+                    writeMessage(input, clientSocket, 0);
+
+                    if(strcmp(input, "QUIT\n") == 0)
+                    {
+                        printf("Exiting Client\n");
+                        free(input);
+                        exit(0);
+                    }
                 }
             }
             //forwardMessage(STDIN_FILENO, clientSocket, 1, 1);
