@@ -18,6 +18,7 @@
 #include <netinet/in.h>     // servaddr
 #include <sys/select.h>  // select, FD_ZERO, FD_SET, FD_ISSET
 #include <errno.h>
+#include <fcntl.h>
 
 #define MSG_BUFF_SIZE 4096
 #define MAX_USERNAME_SIZE 1024
@@ -87,37 +88,56 @@ void parseInput(int argc, char** argv)
 
 // Writes a message to a dest file descriptor (that can be socket)
 // writeName flag determines if you want to include your username in the message
-size_t writeMessage(const char* msg, int dest, int writeName)
+size_t writeMessage(const char* msg, int dest)
 {
-    char messageBuffer[MSG_BUFF_SIZE+1];
+    char messageBuffer[MSG_BUFF_SIZE];
     size_t numWritten = 0;
+    size_t messageFrag = 0;
     size_t msgLen = strlen(msg);
+    size_t bytesLeft = msgLen+1;
 
-    memset(messageBuffer, '\0', MSG_BUFF_SIZE+1);
+    memset(messageBuffer, '\0', MSG_BUFF_SIZE);
 
-    if(msgLen + strlen(USERNAME) > MSG_BUFF_SIZE)
+    // if(msgLen > MSG_BUFF_SIZE)
+    // {
+    //     fprintf(stderr, "writeMessage(): message size is too large\n");
+    //     return numWritten;
+    // }
+
+    // // Copy the message into the buffer
+    // strcat(messageBuffer, msg);
+
+    // msgLen = strlen(messageBuffer);
+
+    while(bytesLeft > 0)
     {
-        fprintf(stderr, "writeMessage(): message size is too large\n");
-        return numWritten;
+        if(bytesLeft < MSG_BUFF_SIZE)
+        {            
+            strcat(messageBuffer, msg + messageFrag);
+            numWritten = write(dest, messageBuffer, bytesLeft);
+        }
+        else
+        {
+            strncpy(messageBuffer, msg + messageFrag,  MSG_BUFF_SIZE);
+            messageFrag += MSG_BUFF_SIZE;
+            numWritten = write(dest, messageBuffer, MSG_BUFF_SIZE);
+        }
+        if(numWritten != MSG_BUFF_SIZE && numWritten != bytesLeft)
+        {
+            perror("writeMessage(): write failed ");
+            exit(EXIT_FAILURE);
+        }
+
+        bytesLeft -= numWritten;
+        memset(messageBuffer, '\0', MSG_BUFF_SIZE);
     }
-
-    if(writeName > 0)
-    {
-        // Write the name of the sender before the message
-        strcat(messageBuffer, USERNAME);
-    }
-
-    // Copy the message into the buffer
-    strcat(messageBuffer, msg);
-
-    msgLen = strlen(messageBuffer);
     
-    // Write it to dest
-    if((numWritten = write(dest, messageBuffer, msgLen)) !=  msgLen)
-    {
-        perror("writeMessage(): write failed: ");
-        exit(EXIT_FAILURE);
-    }
+    // // Write it to dest
+    // if((numWritten = write(dest, messageBuffer, msgLen)) !=  msgLen)
+    // {
+    //     perror("writeMessage(): write failed: ");
+    //     exit(EXIT_FAILURE);
+    // }
 
     return numWritten;
 }
@@ -125,55 +145,46 @@ size_t writeMessage(const char* msg, int dest, int writeName)
 // Reads from src and writes the content from src fd to dest fd
 // writeName: to include the username or not (if src is from stdin)
 // echo: whether you want the result that was sent to dest, to be echoed to stdout
-size_t forwardMessage(int src, int dest, int writeName, int echo)
+size_t forwardMessage(int src, int dest)
 {
-    char messageBuffer[MSG_BUFF_SIZE+1];
-    size_t numRead = 0;
+    char messageBuffer[MSG_BUFF_SIZE];
+    int numRead = 0;
 
-    memset(messageBuffer, '\0', MSG_BUFF_SIZE+1);
+    memset(messageBuffer, '\0', MSG_BUFF_SIZE);
 
-    if(echo > 0)
-    {
-        printf("%s", USERNAME);
-    }
-
-    if(writeName > 0)
-    {
-        // Write the name of the sender before the message
-        writeMessage(USERNAME, dest, 0);
-    }
+    // make the reads nonblocking
+    int FLAGS = fcntl(src, F_GETFL);
+    fcntl(src, F_SETFL, FLAGS | O_NONBLOCK);
 
     errno = 0;
     // Keep reading until we get an EOF or newline
     while((numRead = read(src, messageBuffer, MSG_BUFF_SIZE)) > 0)
     {
-        // Null terminate
-        messageBuffer[numRead+1] = '\0';
-
         // Keep writing things from the buffer until we stop
-        if(write(dest, messageBuffer, numRead+1) != numRead+1)
+        if(write(dest, messageBuffer, numRead) != numRead)
         {
             fprintf(stderr,"Write to fd=%d failed\n", dest);
             exit(EXIT_FAILURE);
         }
-        if(echo > 0)
-        {
-            printf("%s", messageBuffer);
-        }
 
         // If we ended with a newline, we are also done reading
-        if(messageBuffer[strlen(messageBuffer)-1] == '\n')
-        {
-            break;
-        }
+        // if(messageBuffer[strlen(messageBuffer)-1] == '\n')
+        // {
+        //     break;
+        // }
+
+        memset(messageBuffer, '\0', MSG_BUFF_SIZE);
     }
 
-    if(errno != 0)
+    if(errno != 0 && (errno != EAGAIN || errno != EWOULDBLOCK))
     {
         fprintf(stderr, "Failed to read from fd=%d\n", src);
         exit(EXIT_FAILURE);
     }
 
+    // Reset back
+    fcntl(src, F_SETFL, FLAGS);
+    
     return numRead;
 }
 
@@ -216,7 +227,7 @@ int main(int argc, char* argv[])
 
     // State your name to the server (just for initial message)
     // from the client
-    writeMessage("", clientSocket, 1);
+    writeMessage(USERNAME, clientSocket);
 
     // fd set for select()
     fd_set readSet;
@@ -243,13 +254,13 @@ int main(int argc, char* argv[])
         {
             if(getline(&input, &inputSize, stdin) != -1)
             {
-                if(strlen(input) >= MSG_BUFF_SIZE)
-                {
-                    fprintf(stderr, "input is too long\n");
-                }
-                else
-                {
-                    writeMessage(input, clientSocket, 0);
+                // if(strlen(input) >= MSG_BUFF_SIZE)
+                // {
+                //     fprintf(stderr, "input is too long\n");
+                // }
+                // else
+                // {
+                    writeMessage(input, clientSocket);
 
                     if(strcmp(input, "QUIT\n") == 0)
                     {
@@ -257,7 +268,7 @@ int main(int argc, char* argv[])
                         free(input);
                         exit(0);
                     }
-                }
+                // }
             }
             //forwardMessage(STDIN_FILENO, clientSocket, 1, 1);
         }
@@ -268,10 +279,11 @@ int main(int argc, char* argv[])
             // Reset the cursor to the beginning so we can write the output
             // from server. 
             // (We would be overwrite the >> that was there before select)
+
             printf("\r");
             fflush(stdout);
 
-            if(forwardMessage(clientSocket, STDOUT_FILENO, 0, 0) == 0)
+            if(forwardMessage(clientSocket, STDOUT_FILENO) == 0)
             {
                 printf("Lost connection to server\n");
                 exit(EXIT_FAILURE);

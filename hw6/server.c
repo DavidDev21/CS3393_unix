@@ -5,6 +5,13 @@
     Due Date: April 23, 2020
 */
 
+/*
+    TODO:
+        Allow server to send any variable message length
+        It doesn't have to depend on MSG_BUFF_SIZE since we allocate on the heap for the queue anyways
+        - the client now is able to read any length of messages from the server, So you might as well
+*/
+
 // SERVER
 #define _GNU_SOURCE
 // Needed for sigaction
@@ -26,7 +33,7 @@
 #define LISTEN_BUFF 10 // for the queue size for listen()
 #define MSG_BUFF_SIZE 4096
 #define MAX_USERNAME_SIZE 1024
-#define MAX_CLIENT_NUM 1025
+#define MAX_CLIENT_NUM 4
 #define MSG_QUEUE_SIZE 1024
 #define GREETING "Welcome User! Hopefully I can keep you sane. :)\n"
 
@@ -66,8 +73,10 @@ message_queue outMessages;
 void checkNull(void* arrayPtr, const char* errorMsg);
 void errorCheck(int errorCode, char* message);
 void parseInput(int argc, char** argv);
-void p_init_struct(void);
-void p_free_struct(void);
+void p_init_userlist(void);
+void p_init_msgqueue(void);
+void p_free_userlist(void);
+void p_free_msgqueue(void);
 void* broadcastThread(void* args);
 void* clientThread(void* fd);
 
@@ -169,19 +178,20 @@ size_t sendMessage(const char* msg, int dest)
 }
 
 // func to initialize a struct with mutex and cond
-void p_init_struct(void)
+void p_init_userlist(void)
 {
-    userList.length = 1;
-    outMessages.length = 0;
+    if(MAX_CLIENT_NUM <= 1)
+    {   
+        fprintf(stderr, "Max number of clients must be greater than 1\n");
+        exit(EXIT_FAILURE);
+    }
 
+    userList.length = 1;
+ 
     memset(userList.array, 0, MAX_CLIENT_NUM * sizeof(client_info*));
-    memset(outMessages.queue, 0, MSG_QUEUE_SIZE * sizeof(char*));
 
     errorCheck(pthread_mutex_init(&(userList.lock), NULL), "pthread_mutex_init()");
     errorCheck(pthread_cond_init(&(userList.cond), NULL), "pthread_cond_init()");
-
-    errorCheck(pthread_mutex_init(&(outMessages.lock), NULL), "pthread_mutex_init()");
-    errorCheck(pthread_cond_init(&(outMessages.cond), NULL), "pthread_cond_init()");
 
     // The server is the first user
     client_info* serverInfo = (client_info*) malloc(sizeof(client_info));
@@ -193,21 +203,39 @@ void p_init_struct(void)
     userList.array[0] = serverInfo;
 }
 
-// func to destroy mutex and cond that a struct had
-void p_free_struct(void)
+void p_init_msgqueue(void)
+{   
+    if(MSG_QUEUE_SIZE <= 0)
+    {   
+        fprintf(stderr, "Message queue size can't be 0\n");
+        exit(EXIT_FAILURE);
+    }
+
+    outMessages.length = 0;
+    memset(outMessages.queue, 0, MSG_QUEUE_SIZE * sizeof(char*));
+    errorCheck(pthread_mutex_init(&(outMessages.lock), NULL), "pthread_mutex_init()");
+    errorCheck(pthread_cond_init(&(outMessages.cond), NULL), "pthread_cond_init()");
+}
+
+void p_free_userlist(void)
 {
     for(size_t i = 0; i < MAX_CLIENT_NUM; i++)
     {
         free(userList.array[i]);
     }
 
+    errorCheck(pthread_mutex_destroy(&(userList.lock)), "pthread_mutex_destroy()");
+    errorCheck(pthread_cond_destroy(&(userList.cond)), "pthread_cond_destroy()");
+}
+
+void p_free_msgqueue(void)
+{
+
     for(size_t i = 0; i < MSG_QUEUE_SIZE; i++)
     {
         free(outMessages.queue[i]);
     }
 
-    errorCheck(pthread_mutex_destroy(&(userList.lock)), "pthread_mutex_destroy()");
-    errorCheck(pthread_cond_destroy(&(userList.cond)), "pthread_cond_destroy()");
     errorCheck(pthread_mutex_destroy(&(outMessages.lock)), "pthread_mutex_destroy()");
     errorCheck(pthread_cond_destroy(&(outMessages.cond)), "pthread_cond_destroy()");
 }
@@ -295,7 +323,7 @@ int addUser(client_info* newUser)
 
     for(size_t i = 1; i < MAX_CLIENT_NUM; i++)
     {
-        printf("ADDUSER(): %d\n", i);
+        printf("ADDUSER(): %ld\n", i);
         // Empty slot
         if(userList.array[i] == NULL)
         {
@@ -413,8 +441,7 @@ int sendUserList(int dest)
     char message[MSG_BUFF_SIZE];
     memset(message, '\0', MSG_BUFF_SIZE);
 
-    // strncpy pads the rest of message buffer with null
-    strncpy(message, "Users Online:\n", strlen("Users Online:\n"));
+    strcat(message, "Users Online:\n");
 
     sendMessage(message, dest);
 
@@ -438,7 +465,7 @@ int sendUserList(int dest)
                 memset(message, '\0', MSG_BUFF_SIZE);
                 char* name = userList.array[i]->username;
 
-                strncpy(message, name, strlen(name));
+                strcat(message, name);
 
                 strcat(message, "\n");
 
@@ -446,6 +473,9 @@ int sendUserList(int dest)
             }
         }
 
+        memset(message, '\0', MSG_BUFF_SIZE);
+        snprintf(message, MSG_BUFF_SIZE, "\nNumber of online users: %ld\n", userList.length-1);
+        sendMessage(message, dest);
         sendMessage("\n", dest);
     }
 
@@ -478,7 +508,7 @@ void* broadcastThread(void* args)
 
         // Lock for the list of clients
         pthread_mutex_lock(&(userList.lock));
-        printf("BROADCAST: %d\n", userList.length);
+        printf("BROADCAST: %ld\n", userList.length);
         // Send the message out per client
         // userList[0] shall be reserved for server
         for(size_t i = 1; i < MAX_CLIENT_NUM; i++)
@@ -542,6 +572,9 @@ void* clientThread(void* fd)
     if(addUser(user) < 0)
     {
         sendMessage("Room is full\n", clientSock);
+        memset(buffer, '\0', MSG_BUFF_SIZE);
+        snprintf(buffer, MSG_BUFF_SIZE, "Room capacity: %d\n", MAX_CLIENT_NUM-1);
+        sendMessage(buffer, clientSock);
         free(user);
         close(clientSock);
         pthread_exit(EXIT_SUCCESS);
@@ -566,6 +599,8 @@ void* clientThread(void* fd)
         }
 
         printf("%s: %s\n", user->username, buffer);
+        // Theory
+        enqueueMessage(buffer, user);
     }
 
     // Note: by the time the server gets "QUIT\n"
@@ -592,7 +627,8 @@ int main(int argc, char* argv[])
     printf("PORT: %d\n", SERVER_PORT);
 
     // init the data structures for msg queue and user list
-    p_init_struct();
+    p_init_userlist();
+    p_init_msgqueue();
 
     // Start up the thread for broadcasting
     // Note: We dont need the thread id since we setting the thread to detach
@@ -673,7 +709,8 @@ int main(int argc, char* argv[])
 
     }
     // Never reaches
-    close(serverSocket);            
-    p_free_struct();
+    errorCheck(close(serverSocket), "failed close()");            
+    p_free_userlist();
+    p_free_msgqueue();
     return 0;
 }
