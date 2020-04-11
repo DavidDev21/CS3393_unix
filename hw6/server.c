@@ -5,16 +5,8 @@
     Due Date: April 23, 2020
 */
 
-/*
-    TODO:
-        Allow server to send any variable message length
-        It doesn't have to depend on MSG_BUFF_SIZE since we allocate on the heap for the queue anyways
-        - the client now is able to read any length of messages from the server, So you might as well
-*/
-
 // SERVER
 #define _GNU_SOURCE
-// Needed for sigaction
 #define _POSIX_C_SOURCE
 
 #include <stdio.h>
@@ -22,20 +14,18 @@
 #include <unistd.h>
 #include <string.h>      // strlen
 #include <sys/socket.h>     // socket, AF_INET, SOCK_STREAM
-#include <arpa/inet.h>      // inet_pton (converts a string to network)
-#include <netinet/in.h>     // servaddr
-#include <sys/select.h>  // select, FD_ZERO, FD_SET, FD_ISSET
+#include <netinet/in.h>     // servaddr, htons, htonl
 #include <errno.h>
-#include <setjmp.h>
 #include <pthread.h>
+#include <fcntl.h>
 
 // marcos
 #define LISTEN_BUFF 10 // for the queue size for listen()
-#define MSG_BUFF_SIZE 4096
+#define MSG_BUFF_SIZE 2048
 #define MAX_USERNAME_SIZE 1024
-#define MAX_CLIENT_NUM 4
-#define MSG_QUEUE_SIZE 1024
-#define GREETING "Welcome User! Hopefully I can keep you sane. :)\n"
+#define MAX_CLIENT_NUM 100
+#define MSG_QUEUE_SIZE 100
+#define GREETING "Welcome User! Feel free to speak your mind!\n"
 
 // Usage: server <username> <optional port>
 
@@ -65,6 +55,15 @@ typedef struct{
     pthread_cond_t cond; // for if the queue is full
 } message_queue;
 
+// Struct for a string of unknown sizes (allocated on the heap)
+typedef struct
+{
+    char* message;
+    size_t length;
+    size_t capacity;
+} dynamic_string;
+
+
 // Should be global for easy accessibility between threads
 client_list userList;
 message_queue outMessages;
@@ -77,9 +76,12 @@ void p_init_userlist(void);
 void p_init_msgqueue(void);
 void p_free_userlist(void);
 void p_free_msgqueue(void);
+void DS_init(dynamic_string* target, size_t initCap);
+void DS_free(dynamic_string* target);
 void* broadcastThread(void* args);
 void* clientThread(void* fd);
 
+int DS_appendMessage(dynamic_string* dest, const char* message);
 int enqueueMessage(char* message, client_info* sender);
 int removeMessage();
 int addUser(client_info* newUser);
@@ -90,6 +92,108 @@ int sendUserList(int dest);
 size_t sendMessage(const char* msg, int dest);
 
 // ====== Utils
+// dest should be the address to the dynamic string struct
+// This function makes sure that there is enough space in dest->message
+// for strcat(), otherwise it will realloc enough space
+int DS_appendMessage(dynamic_string* dest, const char* message)
+{
+    if(dest == NULL)
+    {
+        fprintf(stderr, "DS_appendMessage(): dest is NULL\n");
+        return -1;
+    }
+    if(message == NULL)
+    {
+        fprintf(stderr, "DS_appendMessage(): message is NULL\n");
+        return -1;
+    }
+
+    size_t msgLen = strlen(message);
+    size_t newCap = 0;
+
+    // Inital message, just make the size the same length as the message
+    if(dest->message == NULL)
+    {
+        newCap = (msgLen + 1)* sizeof(char);        
+        dest->message = (char*) malloc(newCap);
+        checkNull(dest->message, "Failed malloc()");
+        dest->capacity = newCap;
+        memset(dest->message, '\0', newCap);
+    }
+    // Realloc if our buffer is not long enough
+    else if(dest->length + msgLen + 1 >= dest->capacity)
+    {
+        newCap = 2 * (dest->length + msgLen + 1) * sizeof(char);
+        char* temp = (char*) realloc(dest->message, newCap);
+        checkNull(temp, "Failed realloc()");
+        dest->message = temp;
+        dest->capacity = newCap;
+    }
+
+    // concat message with existing string
+    strcat(dest->message, message);
+    dest->length = dest->length + msgLen;
+
+    return 0;
+}
+
+// initializes the dynamic_string struct for use
+// Optional initial size if wanted
+// Do not init twice on same object
+void DS_init(dynamic_string* target, size_t initCap)
+{
+    if(target == NULL)
+    {
+        fprintf(stderr, "DS_init(): target is null\n");
+        exit(EXIT_FAILURE);
+    }
+
+    if(initCap > 0)
+    {
+        target->message = (char*) malloc(initCap * sizeof(char));
+        checkNull(target->message, "Failed malloc()");
+        memset(target->message, '\0', initCap);
+        target->capacity = initCap;
+    }
+    else
+    {
+        // if message is null, DS_appendMessage() will allocate for us
+        target->message = NULL;
+        target->capacity = 0;
+    }
+
+    target->length = 0;
+
+}
+
+// Cleans up the dynamic_string struct
+// mainly just frees up the memory allocated for the message
+void DS_free(dynamic_string* target)
+{
+    if(target == NULL)
+    {
+        fprintf(stderr, "DS_free(): target is null\n");
+        exit(EXIT_FAILURE);
+    }
+
+    free(target->message);
+}
+
+// erases existing content in dynamic_string (not free up the memory)
+void DS_clear(dynamic_string* target)
+{
+    if(target == NULL)
+    {
+        fprintf(stderr, "DS_clear(): target is null\n");
+        exit(EXIT_FAILURE);
+    }
+
+    if(target->message != NULL)
+    {
+        memset(target->message, '\0', target->capacity);
+        target->length = 0;
+    }
+}
 
 // Intended to be used right after a malloc / realloc
 // for error checking
@@ -152,27 +256,26 @@ void parseInput(int argc, char** argv)
 // This is meant as a means for the server to sent a direct message to a user
 size_t sendMessage(const char* msg, int dest)
 {
-    char messageBuffer[MSG_BUFF_SIZE];
-    size_t numWritten = 0;
+    int numWritten = 0;
     size_t msgLen = strlen(msg);
 
-    if(msgLen >= MSG_BUFF_SIZE)
-    {
-        fprintf(stderr, "sendMessage(): message size is too large\n");
-        return numWritten;
-    }
-
-    memset(messageBuffer, '\0', MSG_BUFF_SIZE);
+    size_t buffLen = (msgLen+1) * sizeof(char);
+    char* messageBuffer = (char*) malloc(buffLen);
+    checkNull(messageBuffer, "Failed malloc()");
+    memset(messageBuffer, '\0', buffLen);
 
     // Copy the message into the buffer
     strncpy(messageBuffer, msg, msgLen);
     
     // Write it to dest
-    if((numWritten = write(dest, messageBuffer, msgLen)) !=  msgLen)
+    if((numWritten = write(dest, messageBuffer, buffLen)) !=  buffLen)
     {
         perror("sendMessage(): write failed: ");
+        free(messageBuffer);
         exit(EXIT_FAILURE);
     }
+
+    free(messageBuffer);
 
     return numWritten;
 }
@@ -190,10 +293,13 @@ void p_init_userlist(void)
  
     memset(userList.array, 0, MAX_CLIENT_NUM * sizeof(client_info*));
 
-    errorCheck(pthread_mutex_init(&(userList.lock), NULL), "pthread_mutex_init()");
-    errorCheck(pthread_cond_init(&(userList.cond), NULL), "pthread_cond_init()");
+    errorCheck(pthread_mutex_init(&(userList.lock), NULL), 
+                                                "pthread_mutex_init()");
+    errorCheck(pthread_cond_init(&(userList.cond), NULL), 
+                                                "pthread_cond_init()");
 
-    // The server is the first user
+    // The server is the first and permanent user
+    // The server never gets removed from the list until process dies
     client_info* serverInfo = (client_info*) malloc(sizeof(client_info));
     checkNull(serverInfo, "Failed malloc()");
     memset(serverInfo->username, '\0', MAX_USERNAME_SIZE);
@@ -203,6 +309,7 @@ void p_init_userlist(void)
     userList.array[0] = serverInfo;
 }
 
+// Initializes the message queue
 void p_init_msgqueue(void)
 {   
     if(MSG_QUEUE_SIZE <= 0)
@@ -213,10 +320,13 @@ void p_init_msgqueue(void)
 
     outMessages.length = 0;
     memset(outMessages.queue, 0, MSG_QUEUE_SIZE * sizeof(char*));
-    errorCheck(pthread_mutex_init(&(outMessages.lock), NULL), "pthread_mutex_init()");
-    errorCheck(pthread_cond_init(&(outMessages.cond), NULL), "pthread_cond_init()");
+    errorCheck(pthread_mutex_init(&(outMessages.lock), NULL), 
+                                                    "pthread_mutex_init()");
+    errorCheck(pthread_cond_init(&(outMessages.cond), NULL), 
+                                                    "pthread_cond_init()");
 }
 
+// Cleans up userlist
 void p_free_userlist(void)
 {
     for(size_t i = 0; i < MAX_CLIENT_NUM; i++)
@@ -224,34 +334,35 @@ void p_free_userlist(void)
         free(userList.array[i]);
     }
 
-    errorCheck(pthread_mutex_destroy(&(userList.lock)), "pthread_mutex_destroy()");
-    errorCheck(pthread_cond_destroy(&(userList.cond)), "pthread_cond_destroy()");
+    errorCheck(pthread_mutex_destroy(&(userList.lock)), 
+                                                    "pthread_mutex_destroy()");
+    errorCheck(pthread_cond_destroy(&(userList.cond)), 
+                                                    "pthread_cond_destroy()");
 }
 
+// Cleans up msgqueue
 void p_free_msgqueue(void)
 {
-
     for(size_t i = 0; i < MSG_QUEUE_SIZE; i++)
     {
         free(outMessages.queue[i]);
     }
 
-    errorCheck(pthread_mutex_destroy(&(outMessages.lock)), "pthread_mutex_destroy()");
-    errorCheck(pthread_cond_destroy(&(outMessages.cond)), "pthread_cond_destroy()");
+    errorCheck(pthread_mutex_destroy(&(outMessages.lock)), 
+                                                    "pthread_mutex_destroy()");
+    errorCheck(pthread_cond_destroy(&(outMessages.cond)), 
+                                                    "pthread_cond_destroy()");
 }
 
 // ======= Chatroom functions
 // Functions for managing message queue
-// Note to self: messages on the queue are meant for broadcasting
+
 // Adds given message to the queue
+// Note to self: messages on the queue are meant for broadcasting
+// Note 2: it makes its own copy of the message, so it doesn't matter
+// if the message gets freed up after a call to enqueueMessage() by the caller
 int enqueueMessage(char* message, client_info* sender)
 {
-    if(strlen(message) + strlen(sender->username) + 3 >= MSG_BUFF_SIZE)
-    {
-        fprintf(stderr, "enqueueMessage(): message too long\n");
-        return -1;
-    }
-
     // Attempt to acquire the lock on the msg queue
     pthread_mutex_lock(&(outMessages.lock));
 
@@ -262,10 +373,12 @@ int enqueueMessage(char* message, client_info* sender)
     }
 
     // Allocate space on heap for message
-    char* messageBuffer = (char*)malloc(MSG_BUFF_SIZE);
+    size_t buffLen = (strlen(message) + strlen(sender->username) + 3) * 
+                                                                sizeof(char);
+    char* messageBuffer = (char*) malloc(buffLen);
     checkNull(messageBuffer, "Failed malloc()");
-    memset(messageBuffer, '\0', MSG_BUFF_SIZE);
-    
+    memset(messageBuffer, '\0', buffLen);
+
     // Add username to the message
     strcat(messageBuffer, sender->username);
     strcat(messageBuffer, ": ");
@@ -286,13 +399,20 @@ int enqueueMessage(char* message, client_info* sender)
 // Yes, this isn't optimal
 // This is to be used in conjunction with a function
 // that already has acquired the lock for the message queue
+// Otherwise, risk corrupting the queue
 int removeMessage()
 {
+    if(outMessages.length <= 0)
+    {
+        fprintf(stderr, "removeMessage(): message queue empty\n");
+        return -1;
+    }
+
     // Free up the message in the head of queue
     free(outMessages.queue[0]);
 
     // Shift items over to the left, writing over the item at index
-    for(size_t i = 0; outMessages.queue[i] != NULL; i++)
+    for(size_t i = 0; i < MSG_QUEUE_SIZE-1; i++)
     {
         outMessages.queue[i] = outMessages.queue[i+1];
     }
@@ -303,9 +423,10 @@ int removeMessage()
 }
 
 // Functions for managing user list
+// Adds a new user to the list
+// Basically adds the pointer to the client_info struct for book keeping
 int addUser(client_info* newUser)
 {
-    printf("IN ADDUSER\n");
     if(newUser == NULL)
     {
         fprintf(stderr, "addUser(): user is NULL\n");
@@ -314,6 +435,8 @@ int addUser(client_info* newUser)
 
     pthread_mutex_lock(&(userList.lock));
 
+    // If we full, then we must reject this user
+    // Have client thread handle cleanup
     if(userList.length + 1 > MAX_CLIENT_NUM)
     {
         fprintf(stderr, "addUser(): No more room for new clients\n");
@@ -321,9 +444,9 @@ int addUser(client_info* newUser)
         return -1;
     }
 
+    // Go find an empty slot
     for(size_t i = 1; i < MAX_CLIENT_NUM; i++)
     {
-        printf("ADDUSER(): %ld\n", i);
         // Empty slot
         if(userList.array[i] == NULL)
         {
@@ -333,19 +456,6 @@ int addUser(client_info* newUser)
             break;
         }
     }
-
-
-    // Announce who joined to the room
-    // serverMsg will get freed up once the message is removed from queue
-    // char* serverMsg = (char*) malloc(MSG_BUFF_SIZE);
-    // checkNull(serverMsg, "Failed malloc()");
-
-    // memset(serverMsg, '\0', MSG_BUFF_SIZE);
-    // strcat(serverMsg, newUser->username);
-    // strcat(serverMsg, "has joined the room\n");
-
-    // // Note: array[0] is reserved for the server
-    // enqueueMessage(serverMsg, userList.array[0]);
 
     serverAnnouncement(" has joined the room\n", newUser->username);
 
@@ -384,14 +494,11 @@ int removeUser(client_info* user)
     // Announce the user is leaving
     serverAnnouncement(" has left the room\n", user->username);
     printf("%s has left the room\n", user->username);
-    
-    printf("REMOVED(): id %d\n", user->id);
+
     // Release the user and mark the slot as free again
     free(userList.array[user->id]);
     userList.array[user->id] = NULL;
     userList.length--;
-
-    printf("REMOVED(): success\n");
 
     // Announce to other threads that there is now space in the list
     // (If anyone is possibly waiting)
@@ -406,25 +513,39 @@ int removeUser(client_info* user)
 // username could be NULL if it is a message not directed towards anyone
 int serverAnnouncement(char* message, char* username)
 {
-    if((username == NULL && strlen(message) >= MSG_BUFF_SIZE) ||
-       (username != NULL && strlen(message) + strlen(username) >= MSG_BUFF_SIZE))
+    if(message == NULL)
     {
-        fprintf(stderr, "serverAnnouncement(): message too long\n");
+        fprintf(stderr, "ServerAnnoucement: message is null\n");
         return -1;
     }
 
-    char* serverMsg = (char*) malloc(MSG_BUFF_SIZE);
-    checkNull(serverMsg, "Failed malloc()");
-    memset(serverMsg, '\0', MSG_BUFF_SIZE);
+    size_t nameLen = 0;
 
+    if(username != NULL)
+    {
+        nameLen = strlen(username);
+    }
+
+    size_t buffLen = (strlen(message) + nameLen + 1) * sizeof(char);
+    char* serverMsg = (char*) malloc(buffLen);
+    checkNull(serverMsg, "Failed malloc()");
+    memset(serverMsg, '\0', buffLen);
+
+    // The message has a user of interest
+    // EX: "User1 has left the room"
     if(username != NULL)
     {
         strcat(serverMsg, username);
     }
+
     strcat(serverMsg, message);
     
     // put the message on the queue
     enqueueMessage(serverMsg, userList.array[0]);
+
+    // Free it up after we enqueue on the queue
+    // The queue has its own copy
+    free(serverMsg);
 
     return 0;
 }
@@ -438,46 +559,44 @@ int sendUserList(int dest)
         return -1;
     }
 
-    char message[MSG_BUFF_SIZE];
-    memset(message, '\0', MSG_BUFF_SIZE);
-
-    strcat(message, "Users Online:\n");
-
-    sendMessage(message, dest);
+    dynamic_string messageBuffer;
+    DS_init(&messageBuffer, 0);
+    DS_appendMessage(&messageBuffer, "Users Online:\n");
 
     pthread_mutex_lock(&(userList.lock));
-
 
     // No other user other than server
     if(userList.length == 1)
     {
-        sendMessage("No other users online\n\n", dest);        
+        DS_appendMessage(&messageBuffer, "No other users online\n\n");     
     }
     else
     {
-        // Send the users one at a time
-        // This ensures we would be able to give the entire list
-        // without worrying about the message buffer
+        // Add each username to our message
         for(size_t i = 1; i < MAX_CLIENT_NUM; i++)
         {
             if(userList.array[i] != NULL)
             {  
-                memset(message, '\0', MSG_BUFF_SIZE);
-                char* name = userList.array[i]->username;
-
-                strcat(message, name);
-
-                strcat(message, "\n");
-
-                sendMessage(message, dest);
+                DS_appendMessage(&messageBuffer, userList.array[i]->username);
+                DS_appendMessage(&messageBuffer, "\n");
             }
         }
 
-        memset(message, '\0', MSG_BUFF_SIZE);
-        snprintf(message, MSG_BUFF_SIZE, "\nNumber of online users: %ld\n", userList.length-1);
-        sendMessage(message, dest);
-        sendMessage("\n", dest);
+        // Definitely overkill in space
+        char userCount[MAX_CLIENT_NUM];
+        memset(userCount, '\0', MAX_CLIENT_NUM);
+
+        DS_appendMessage(&messageBuffer, "\nNumber of online users: ");
+
+        snprintf(userCount, MAX_CLIENT_NUM, "%ld", userList.length-1);
+        DS_appendMessage(&messageBuffer, userCount);
+        DS_appendMessage(&messageBuffer, "\n\n");
     }
+
+    // Send our message over to client (properly formatted)
+    sendMessage(messageBuffer.message, dest);
+    // Free up our dynamic string
+    DS_free(&messageBuffer);
 
     pthread_mutex_unlock(&(userList.lock));
     return 0;
@@ -501,14 +620,12 @@ void* broadcastThread(void* args)
             pthread_cond_wait(&(outMessages.cond), &(outMessages.lock));
         }
 
-        printf("BROADCAST: START\n");
-
         // Now that we have a message to send out
         char* outboundMessage = outMessages.queue[0];
 
         // Lock for the list of clients
         pthread_mutex_lock(&(userList.lock));
-        printf("BROADCAST: %ld\n", userList.length);
+
         // Send the message out per client
         // userList[0] shall be reserved for server
         for(size_t i = 1; i < MAX_CLIENT_NUM; i++)
@@ -519,7 +636,6 @@ void* broadcastThread(void* args)
             // how the server received them
             if(userList.array[i] != NULL)
             {
-                printf("SEND MESSAGE TO %s\n", userList.array[i]->username);
                 sendMessage(outboundMessage, userList.array[i]->sockfd);
             }
         }
@@ -530,8 +646,7 @@ void* broadcastThread(void* args)
         // to the producer threads
         removeMessage();
 
-        printf("BROADCAST: FINISHED\n");
-
+        // Signal to threads that the queue is now has space
         pthread_cond_signal(&(outMessages.cond));
         pthread_mutex_unlock(&(userList.lock));
         pthread_mutex_unlock(&(outMessages.lock));
@@ -540,20 +655,27 @@ void* broadcastThread(void* args)
 }
 
 // fd here should be the client socket from Accept()
+// client function
 void* clientThread(void* fd)
 {
     // First mark the thread as detached
     pthread_detach(pthread_self());
 
     int clientSock = *((int*)fd);
-    char buffer[MSG_BUFF_SIZE];
-    memset(buffer, '\0', MSG_BUFF_SIZE);
+
+    // The check for the size is done in main()
+    // MSG_BUFF_SIZE >= MAX_USERNAME_SIZE
+    char buffer[MSG_BUFF_SIZE + 1];
+    size_t buffSize = sizeof(buffer);
+    memset(buffer, '\0', buffSize);
+
+    dynamic_string clientInput;
 
     // client's first message should be its username
     if(read(clientSock, buffer, MAX_USERNAME_SIZE) < 0)
     {
         perror("clientThread: failed to read username");
-        pthread_exit((void*)-1);
+        pthread_exit(0);
     }
 
     client_info* user = (client_info*) malloc(sizeof(client_info));
@@ -567,29 +689,38 @@ void* clientThread(void* fd)
     sendUserList(clientSock);
 
     // Try to add to the list
-    // If fail, then we just inform the user
-    // And reject their request
+    // If fail, then we just inform the user and reject their request
     if(addUser(user) < 0)
     {
-        sendMessage("Room is full\n", clientSock);
-        memset(buffer, '\0', MSG_BUFF_SIZE);
-        snprintf(buffer, MSG_BUFF_SIZE, "Room capacity: %d\n", MAX_CLIENT_NUM-1);
-        sendMessage(buffer, clientSock);
+        // Log that we rejected a user
+        printf("Room at full capacity, Rejected USER -> %s\n", user->username);
+
+        // using DS to avoid problems with a small buffSize
+        // causing problems for snprintf
+        DS_init(&clientInput, 0);
+        DS_appendMessage(&clientInput, "Room is full\nRoom capacity: ");
+        memset(buffer, '\0', buffSize);
+        snprintf(buffer, buffSize, "%d\n", MAX_CLIENT_NUM-1);
+        DS_appendMessage(&clientInput, buffer);
+
+        // Send the formatted message
+        sendMessage(clientInput.message, clientSock);
+
+        // Cleanup
         free(user);
-        close(clientSock);
+        DS_free(&clientInput);
+        errorCheck(close(clientSock), "close()");
         pthread_exit(EXIT_SUCCESS);
     }
-
-    printf("NEW USER name: %s\n", user->username);
-    printf("NEW USER sockfd: %d\n", user->sockfd);
-    printf("NEW USER ID: %d\n", user->id);
+    // At this point, user has been accepted and added into the list
 
     // send a greeting
     sendMessage(GREETING, clientSock);
 
     memset(buffer, '\0', MSG_BUFF_SIZE);
+
     // Now start to take in user messages
-    while(read(clientSock, buffer, MSG_BUFF_SIZE) > 0)
+    while(read(clientSock, buffer, buffSize) > 0)
     {
         // Client told us, it is exiting the chat
         // Move on to cleanup
@@ -598,20 +729,50 @@ void* clientThread(void* fd)
             break;
         }
 
-        printf("%s: %s\n", user->username, buffer);
-        // Theory
-        enqueueMessage(buffer, user);
+        DS_init(&clientInput, 0);
+        DS_appendMessage(&clientInput, buffer);
+
+        int flags = fcntl(clientSock, F_GETFL);
+        fcntl(clientSock, F_SETFL, flags | O_NONBLOCK);
+
+        errno = 0;
+        // See if there is anymore from the client
+        while(read(clientSock, buffer, buffSize) > 0)
+        {
+            printf("client: MORE\n");
+            DS_appendMessage(&clientInput, buffer);
+        }
+
+        // ignoring errors we would be expecting
+        // EFAULT = losing connection to client
+        // EAGAIN / EWOULDBLOCk = Nothing else to read from socket
+        if(errno != 0 && errno != EFAULT && 
+                                (errno != EAGAIN || errno != EWOULDBLOCK))
+        {
+            fprintf(stderr, "clientThread(): read from clientSock failed\n");
+            fprintf(stderr, "error: %s\n", strerror(errno));
+            DS_free(&clientInput);
+            errorCheck(close(clientSock), "close()");
+            pthread_exit(0); //the return val isn't even used
+        }
+
+        enqueueMessage(clientInput.message, user);
+
+        DS_free(&clientInput);
+
+        // reset the flags (basically forces us to block for the next input)
+        fcntl(clientSock, F_SETFL, flags);
     }
 
     // Note: by the time the server gets "QUIT\n"
     // The client on the other end, should have already exited
-    // Having the server send messages to the client at this point
-    // Is an error
-
+    // Having the server send messages to the client at this point is an error
     // Removes the user from the list and informs the room
     removeUser(user);
+    
+    // close the socket
+    errorCheck(close(clientSock), "close()");
 
-    printf("CLIENT_THREAD with sockfd %d: EXITING\n", clientSock);
     // free up the int we stored on the heap
     free(fd);
 
@@ -621,6 +782,12 @@ void* clientThread(void* fd)
 // =========== start of main
 int main(int argc, char* argv[])
 {
+    if(MSG_BUFF_SIZE < MAX_USERNAME_SIZE)
+    {
+        fprintf(stderr, "MSG_BUFF_SIZE should at least MAX_USERNAME_SIZE\n");
+        exit(EXIT_FAILURE);
+    }
+
     // Goes through the arguments and sets any changes to defaults
     parseInput(argc, argv);
 
@@ -636,7 +803,6 @@ int main(int argc, char* argv[])
     pthread_t broadcast_tid;
     pthread_create(&broadcast_tid, NULL, broadcastThread, NULL);
 
-    printf("PASSED BROADCAST\n");
     // Setup the socket for server
     // Variables
     // FD for serversocker and the client connection
@@ -678,36 +844,22 @@ int main(int argc, char* argv[])
     // Starts up a new thread for client
     while(1)
     {
-        struct sockaddr_in clientInfo = {0};
-        socklen_t clientSize = sizeof(clientInfo);
         // The client thread has to clean this up
         int* clientConn = malloc(sizeof(int));
         checkNull(clientConn, "Failed malloc()");
-        // int connected = 0;
 
-        printf("\nWaiting for client\n");
+        printf("Main(): Waiting for client\n");
 
-        *clientConn = accept(serverSocket, (struct sockaddr*) &clientInfo, 
-                                                            &clientSize);
+        *clientConn = accept(serverSocket, NULL, NULL);
 
         errorCheck(*clientConn, "Failed Accept: ");
 
-        printf("CLIENT CONNECTED\n\n");
-
-        // char clientAddr[INET_ADDRSTRLEN];
-        // if(inet_ntop(AF_INET, &clientInfo.sin_addr, clientAddr, 
-        //                                         INET_ADDRSTRLEN) == NULL)
-        // {
-        //     perror("inet_ntop()");
-        //     exit(EXIT_FAILURE);
-        // }
-
-        // printf("Client Addr: %s\n", clientAddr);
+        printf("Main(): Client connected, creating client thread\n");
 
         pthread_t client_tid; // not actually used
         pthread_create(&client_tid, NULL, clientThread, (void*)clientConn);
-
     }
+
     // Never reaches
     errorCheck(close(serverSocket), "failed close()");            
     p_free_userlist();

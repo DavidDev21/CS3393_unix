@@ -4,13 +4,84 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+// Struct for a string of unknown sizes (allocated on the heap)
+typedef struct
+{
+    char* message;
+    size_t length;
+    size_t capacity;
+} dynamic_string;
+void checkNull(void* arrayPtr, const char* errorMsg)
+{
+    if(arrayPtr == NULL)
+    {
+        perror(errorMsg);
+        exit(EXIT_FAILURE);
+    }
+}
 
+// dest should be the address to the pointer
+// This func should be for adding message
+int DS_appendMessage(dynamic_string* dest, const char* message)
+{
+    if(dest == NULL)
+    {
+        fprintf(stderr, "DS_appendMessage(): dest is NULL\n");
+        return -1;
+    }
+    if(message == NULL)
+    {
+        fprintf(stderr, "DS_appendMessage(): message is NULL\n");
+        return -1;
+    }
+
+    size_t msgLen = strlen(message);
+    size_t newCap = 0;
+
+    if(dest->message == NULL)
+    {
+        newCap = (msgLen + 1)* sizeof(char);
+        dest->message = (char*) malloc(newCap);
+        checkNull(dest->message, "Failed malloc()");
+        dest->capacity = newCap;
+        memset(dest->message, '\0', newCap);
+    }
+    else if(dest->length + msgLen + 1 >= dest->capacity)
+    {
+        newCap = 2 * (msgLen + dest->capacity + 1) * sizeof(char);
+        char* temp = (char*) realloc(dest->message, newCap);
+        checkNull(temp, "Failed realloc()");
+        dest->message = temp;
+        dest->capacity = newCap;
+    }
+
+    strcat(dest->message, message);
+    dest->length = dest->length + msgLen;
+
+    return 0;
+}
+
+void init_DS(dynamic_string* target)
+{
+    target->message = NULL;
+    target->length = 0;
+    // cap doesn't matter
+}
+
+void free_DS(dynamic_string* target)
+{
+    free(target->message);
+}
 
 int main()
 {
-
-
-
+    dynamic_string test1;
+    init_DS(&test1);
+    DS_appendMessage(&test1, "HELLO WORLD?\n");
+    printf("%s", test1.message);
+    DS_appendMessage(&test1, "THISWORKS?\n");
+    printf("%s", test1.message);
+    free_DS(&test1);
 
     // char buf[10] = "h";
 

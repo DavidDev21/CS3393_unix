@@ -20,12 +20,21 @@
 #include <errno.h>
 #include <fcntl.h>
 
-#define MSG_BUFF_SIZE 4096
-#define MAX_USERNAME_SIZE 1024
+#define MSG_BUFF_SIZE 1024
+#define MAX_USERNAME_SIZE 1025
 
 static in_port_t SERVER_PORT=8920; // Port that the server is listening on
 static const char* SERVER_ADDR = "127.0.0.1";
 static char USERNAME[MAX_USERNAME_SIZE];
+
+void checkNull(void* arrayPtr, const char* errorMsg)
+{
+    if(arrayPtr == NULL)
+    {
+        perror(errorMsg);
+        exit(EXIT_FAILURE);
+    }
+}
 
 void errorCheck(int errorCode, char* message)
 {
@@ -49,15 +58,13 @@ void parseInput(int argc, char** argv)
         exit(EXIT_FAILURE);
     }
 
-    if(strlen(argv[1]) > MAX_USERNAME_SIZE)
+    if(strlen(argv[1]) >= MAX_USERNAME_SIZE)
     {
-        fprintf(stderr, "Username is too long. Max length is: 1024\n");
+        fprintf(stderr, "Username is too long. Max length is: %d\n", MAX_USERNAME_SIZE - 1);
         exit(EXIT_FAILURE);
     }
 
-    // + 2 for the ": ", + 1 for the Null terminate
-    // Note: USERNAME fits: MAX_USERNAME_SIZE + 3
-    memset(USERNAME, '\0', sizeof(USERNAME));
+    memset(USERNAME, '\0', MAX_USERNAME_SIZE);
     strcat(USERNAME, argv[1]);
 
     for(int i = 2; i < argc; i++)
@@ -87,69 +94,39 @@ void parseInput(int argc, char** argv)
 }
 
 // Writes a message to a dest file descriptor (that can be socket)
-// writeName flag determines if you want to include your username in the message
+// size of the message doesn't matter
 size_t writeMessage(const char* msg, int dest)
 {
-    char messageBuffer[MSG_BUFF_SIZE];
-    size_t numWritten = 0;
-    size_t messageFrag = 0;
+    int numWritten = 0;
     size_t msgLen = strlen(msg);
-    size_t bytesLeft = msgLen+1;
 
-    memset(messageBuffer, '\0', MSG_BUFF_SIZE);
+    char* messageBuffer = (char*) malloc((msgLen+1) * sizeof(char));
+    checkNull(messageBuffer, "Failed malloc()");
 
-    // if(msgLen > MSG_BUFF_SIZE)
-    // {
-    //     fprintf(stderr, "writeMessage(): message size is too large\n");
-    //     return numWritten;
-    // }
-
-    // // Copy the message into the buffer
-    // strcat(messageBuffer, msg);
-
-    // msgLen = strlen(messageBuffer);
-
-    while(bytesLeft > 0)
-    {
-        if(bytesLeft < MSG_BUFF_SIZE)
-        {            
-            strcat(messageBuffer, msg + messageFrag);
-            numWritten = write(dest, messageBuffer, bytesLeft);
-        }
-        else
-        {
-            strncpy(messageBuffer, msg + messageFrag,  MSG_BUFF_SIZE);
-            messageFrag += MSG_BUFF_SIZE;
-            numWritten = write(dest, messageBuffer, MSG_BUFF_SIZE);
-        }
-        if(numWritten != MSG_BUFF_SIZE && numWritten != bytesLeft)
-        {
-            perror("writeMessage(): write failed ");
-            exit(EXIT_FAILURE);
-        }
-
-        bytesLeft -= numWritten;
-        memset(messageBuffer, '\0', MSG_BUFF_SIZE);
-    }
+    memset(messageBuffer, '\0', (msgLen+1));
     
-    // // Write it to dest
-    // if((numWritten = write(dest, messageBuffer, msgLen)) !=  msgLen)
-    // {
-    //     perror("writeMessage(): write failed: ");
-    //     exit(EXIT_FAILURE);
-    // }
+    strcat(messageBuffer, msg);
+
+    // Write it to dest
+    if((numWritten = write(dest, messageBuffer, msgLen+1)) !=  msgLen+1)
+    {
+        perror("writeMessage(): write failed: ");
+        exit(EXIT_FAILURE);
+    }
+
+    free(messageBuffer);
 
     return numWritten;
 }
 
 // Reads from src and writes the content from src fd to dest fd
-// writeName: to include the username or not (if src is from stdin)
-// echo: whether you want the result that was sent to dest, to be echoed to stdout
-size_t forwardMessage(int src, int dest)
+// Note: it reads as much as it can from the src
+// Once there is no data to read, it's done
+// Control the chunks through MSG_BUFF_SIZE
+int forwardMessage(int src, int dest)
 {
     char messageBuffer[MSG_BUFF_SIZE];
     int numRead = 0;
-
     memset(messageBuffer, '\0', MSG_BUFF_SIZE);
 
     // make the reads nonblocking
@@ -157,7 +134,7 @@ size_t forwardMessage(int src, int dest)
     fcntl(src, F_SETFL, FLAGS | O_NONBLOCK);
 
     errno = 0;
-    // Keep reading until we get an EOF or newline
+    // Keep reading until we get an EOF or there is just nothing to read
     while((numRead = read(src, messageBuffer, MSG_BUFF_SIZE)) > 0)
     {
         // Keep writing things from the buffer until we stop
@@ -167,21 +144,16 @@ size_t forwardMessage(int src, int dest)
             exit(EXIT_FAILURE);
         }
 
-        // If we ended with a newline, we are also done reading
-        // if(messageBuffer[strlen(messageBuffer)-1] == '\n')
-        // {
-        //     break;
-        // }
-
         memset(messageBuffer, '\0', MSG_BUFF_SIZE);
     }
 
-    if(errno != 0 && (errno != EAGAIN || errno != EWOULDBLOCK))
+    // EFAULT is when server closed connection
+    if(errno != 0 && errno != EFAULT && (errno != EAGAIN || errno != EWOULDBLOCK))
     {
         fprintf(stderr, "Failed to read from fd=%d\n", src);
         exit(EXIT_FAILURE);
     }
-
+ 
     // Reset back
     fcntl(src, F_SETFL, FLAGS);
     
@@ -254,24 +226,17 @@ int main(int argc, char* argv[])
         {
             if(getline(&input, &inputSize, stdin) != -1)
             {
-                // if(strlen(input) >= MSG_BUFF_SIZE)
-                // {
-                //     fprintf(stderr, "input is too long\n");
-                // }
-                // else
-                // {
-                    writeMessage(input, clientSocket);
+                writeMessage(input, clientSocket);
 
-                    if(strcmp(input, "QUIT\n") == 0)
-                    {
-                        printf("Exiting Client\n");
-                        free(input);
-                        exit(0);
-                    }
-                // }
+                if(strcmp(input, "QUIT\n") == 0)
+                {
+                    printf("Exiting Client\n");
+                    free(input);
+                    exit(0);
+                }
             }
-            //forwardMessage(STDIN_FILENO, clientSocket, 1, 1);
         }
+
         // If there is something to read from server
         if(FD_ISSET(clientSocket, &readSet))
         {
