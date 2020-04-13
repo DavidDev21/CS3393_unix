@@ -615,7 +615,8 @@ int sendUserList(int dest)
 }
 
 // Functions for the threads
-// Thread for reading from message queue and broadcast whenever there is a message
+// Thread for reading from message queue and broadcast 
+// whenever there is a message
 void* broadcastThread(void* args)
 {
     // Mark the thread as detached so we dont have to wait for it
@@ -660,9 +661,12 @@ void* broadcastThread(void* args)
         removeMessage();
 
         // Signal to threads that the queue is now has space
-        p_errorCheck(pthread_cond_signal(&(outMessages.cond)), "cond_signal()");
-        p_errorCheck(pthread_mutex_unlock(&(userList.lock)), "mutex_unlock()");
-        p_errorCheck(pthread_mutex_unlock(&(outMessages.lock)), "mutex_unlock()");
+        p_errorCheck(pthread_cond_signal(&(outMessages.cond)), 
+                                                            "cond_signal()");
+        p_errorCheck(pthread_mutex_unlock(&(userList.lock)), 
+                                                            "mutex_unlock()");
+        p_errorCheck(pthread_mutex_unlock(&(outMessages.lock)), 
+                                                            "mutex_unlock()");
 
     }
 }
