@@ -218,6 +218,17 @@ void errorCheck(int errorCode, char* message)
     }
 }
 
+// errorCode for pthread functions
+void p_errorCheck(int errorCode, char* message)
+{
+    if(errorCode > 0)
+    {
+        perror(message);
+
+        exit(EXIT_FAILURE);
+    }
+}
+
 // Parses through the command line and 
 // assigns the values corresponding to the expected input
 void parseInput(int argc, char** argv)
@@ -293,9 +304,9 @@ void p_init_userlist(void)
  
     memset(userList.array, 0, MAX_CLIENT_NUM * sizeof(client_info*));
 
-    errorCheck(pthread_mutex_init(&(userList.lock), NULL), 
+    p_errorCheck(pthread_mutex_init(&(userList.lock), NULL), 
                                                 "pthread_mutex_init()");
-    errorCheck(pthread_cond_init(&(userList.cond), NULL), 
+    p_errorCheck(pthread_cond_init(&(userList.cond), NULL), 
                                                 "pthread_cond_init()");
 
     // The server is the first and permanent user
@@ -320,9 +331,9 @@ void p_init_msgqueue(void)
 
     outMessages.length = 0;
     memset(outMessages.queue, 0, MSG_QUEUE_SIZE * sizeof(char*));
-    errorCheck(pthread_mutex_init(&(outMessages.lock), NULL), 
+    p_errorCheck(pthread_mutex_init(&(outMessages.lock), NULL), 
                                                     "pthread_mutex_init()");
-    errorCheck(pthread_cond_init(&(outMessages.cond), NULL), 
+    p_errorCheck(pthread_cond_init(&(outMessages.cond), NULL), 
                                                     "pthread_cond_init()");
 }
 
@@ -334,9 +345,9 @@ void p_free_userlist(void)
         free(userList.array[i]);
     }
 
-    errorCheck(pthread_mutex_destroy(&(userList.lock)), 
+    p_errorCheck(pthread_mutex_destroy(&(userList.lock)), 
                                                     "pthread_mutex_destroy()");
-    errorCheck(pthread_cond_destroy(&(userList.cond)), 
+    p_errorCheck(pthread_cond_destroy(&(userList.cond)), 
                                                     "pthread_cond_destroy()");
 }
 
@@ -348,9 +359,9 @@ void p_free_msgqueue(void)
         free(outMessages.queue[i]);
     }
 
-    errorCheck(pthread_mutex_destroy(&(outMessages.lock)), 
+    p_errorCheck(pthread_mutex_destroy(&(outMessages.lock)), 
                                                     "pthread_mutex_destroy()");
-    errorCheck(pthread_cond_destroy(&(outMessages.cond)), 
+    p_errorCheck(pthread_cond_destroy(&(outMessages.cond)), 
                                                     "pthread_cond_destroy()");
 }
 
@@ -364,12 +375,13 @@ void p_free_msgqueue(void)
 int enqueueMessage(char* message, client_info* sender)
 {
     // Attempt to acquire the lock on the msg queue
-    pthread_mutex_lock(&(outMessages.lock));
+    p_errorCheck(pthread_mutex_lock(&(outMessages.lock)), "mutex_lock()");
 
     // If the queue is full, we wait until it gets cleared up
     while(outMessages.length + 1 > MSG_QUEUE_SIZE)
     {
-        pthread_cond_wait(&(outMessages.cond), &(outMessages.lock));
+        p_errorCheck(pthread_cond_wait(&(outMessages.cond), 
+                                    &(outMessages.lock)), "cond_wait()");
     }
 
     // Allocate space on heap for message
@@ -389,8 +401,8 @@ int enqueueMessage(char* message, client_info* sender)
     outMessages.length++;
 
     // Signal the consumer that there is a new message
-    pthread_cond_signal(&(outMessages.cond));
-    pthread_mutex_unlock(&(outMessages.lock));
+    p_errorCheck(pthread_cond_signal(&(outMessages.cond)), "cond_signal()");
+    p_errorCheck(pthread_mutex_unlock(&(outMessages.lock)), "mutex_unlock()");
 
     return 0;
 }
@@ -433,14 +445,14 @@ int addUser(client_info* newUser)
         exit(EXIT_FAILURE);
     }
 
-    pthread_mutex_lock(&(userList.lock));
+    p_errorCheck(pthread_mutex_lock(&(userList.lock)), "mutex_lock()");
 
     // If we full, then we must reject this user
     // Have client thread handle cleanup
     if(userList.length + 1 > MAX_CLIENT_NUM)
     {
         fprintf(stderr, "addUser(): No more room for new clients\n");
-        pthread_mutex_unlock(&(userList.lock));
+        p_errorCheck(pthread_mutex_unlock(&(userList.lock)), "mutex_unlock()");
         return -1;
     }
 
@@ -462,7 +474,7 @@ int addUser(client_info* newUser)
     // Print it for the server's display
     printf("%s has joined the room\n", newUser->username);
 
-    pthread_mutex_unlock(&(userList.lock));
+    p_errorCheck(pthread_mutex_unlock(&(userList.lock)), "mutex_unlock()");
     return 0;
 }
 
@@ -475,19 +487,19 @@ int removeUser(client_info* user)
         return -1;
     }
     // Lock the userlist
-    pthread_mutex_lock(&(userList.lock));
+    p_errorCheck(pthread_mutex_lock(&(userList.lock)), "mutex_lock()");
 
     // (the id should be within the list range if we used addUser())
     if(user->id < 1 || user->id > MAX_CLIENT_NUM)
     {
         fprintf(stderr, "removeUser(): user id not valid\n");
-        pthread_mutex_unlock(&(userList.lock));
+        p_errorCheck(pthread_mutex_unlock(&(userList.lock)), "mutex_unlock()");
         return -2;
     }
     else if(userList.array[user->id] == NULL)
     {
         fprintf(stderr, "removeUser(): user id %d doesn't exist\n", user->id);
-        pthread_mutex_unlock(&(userList.lock));
+        p_errorCheck(pthread_mutex_unlock(&(userList.lock)), "mutex_unlock()");
         return -3;
     }
 
@@ -504,8 +516,8 @@ int removeUser(client_info* user)
     // (If anyone is possibly waiting)
     // Possibly no one if we reject new users at max capacity
     // Rather than letting them wait.
-    pthread_cond_signal(&(userList.cond));
-    pthread_mutex_unlock(&(userList.lock));
+    p_errorCheck(pthread_cond_signal(&(userList.cond)), "cond_signal()");
+    p_errorCheck(pthread_mutex_unlock(&(userList.lock)), "mutex_unlock()");
     return 0;
 }
 
@@ -563,7 +575,7 @@ int sendUserList(int dest)
     DS_init(&messageBuffer, 0);
     DS_appendMessage(&messageBuffer, "Users Online:\n");
 
-    pthread_mutex_lock(&(userList.lock));
+    p_errorCheck(pthread_mutex_lock(&(userList.lock)), "mutex_lock()");
 
     // No other user other than server
     if(userList.length == 1)
@@ -598,7 +610,7 @@ int sendUserList(int dest)
     // Free up our dynamic string
     DS_free(&messageBuffer);
 
-    pthread_mutex_unlock(&(userList.lock));
+    p_errorCheck(pthread_mutex_unlock(&(userList.lock)), "mutex_unlock()");
     return 0;
 }
 
@@ -608,23 +620,24 @@ void* broadcastThread(void* args)
 {
     // Mark the thread as detached so we dont have to wait for it
     // Auto cleanup after thread exits (if it ever does)
-    pthread_detach(pthread_self());
+    p_errorCheck(pthread_detach(pthread_self()), "pthread_detach()");
 
     while(1)
     {
-        pthread_mutex_lock(&(outMessages.lock));
+        p_errorCheck(pthread_mutex_lock(&(outMessages.lock)), "mutex_lock");
 
         // While there is no messages, unlock and block until there is one
         while(outMessages.length == 0)
         {
-            pthread_cond_wait(&(outMessages.cond), &(outMessages.lock));
+            p_errorCheck(pthread_cond_wait(&(outMessages.cond), 
+                                &(outMessages.lock)), "pthread_cond_wait()");
         }
 
         // Now that we have a message to send out
         char* outboundMessage = outMessages.queue[0];
 
         // Lock for the list of clients
-        pthread_mutex_lock(&(userList.lock));
+        p_errorCheck(pthread_mutex_lock(&(userList.lock)), "mutex_lock");
 
         // Send the message out per client
         // userList[0] shall be reserved for server
@@ -647,9 +660,9 @@ void* broadcastThread(void* args)
         removeMessage();
 
         // Signal to threads that the queue is now has space
-        pthread_cond_signal(&(outMessages.cond));
-        pthread_mutex_unlock(&(userList.lock));
-        pthread_mutex_unlock(&(outMessages.lock));
+        p_errorCheck(pthread_cond_signal(&(outMessages.cond)), "cond_signal()");
+        p_errorCheck(pthread_mutex_unlock(&(userList.lock)), "mutex_unlock()");
+        p_errorCheck(pthread_mutex_unlock(&(outMessages.lock)), "mutex_unlock()");
 
     }
 }
@@ -659,7 +672,7 @@ void* broadcastThread(void* args)
 void* clientThread(void* fd)
 {
     // First mark the thread as detached
-    pthread_detach(pthread_self());
+    p_errorCheck(pthread_detach(pthread_self()), "pthread_detach()");
 
     int clientSock = *((int*)fd);
 
@@ -801,7 +814,8 @@ int main(int argc, char* argv[])
     // Note: We dont need the thread id since we setting the thread to detach
     // No need for the main to join it.
     pthread_t broadcast_tid;
-    pthread_create(&broadcast_tid, NULL, broadcastThread, NULL);
+    p_errorCheck(pthread_create(&broadcast_tid, NULL, broadcastThread, NULL),
+                                                            "pthread_create" );
 
     // Setup the socket for server
     // Variables
@@ -857,7 +871,8 @@ int main(int argc, char* argv[])
         printf("Main(): Client connected, creating client thread\n");
 
         pthread_t client_tid; // not actually used
-        pthread_create(&client_tid, NULL, clientThread, (void*)clientConn);
+        p_errorCheck(pthread_create(&client_tid, NULL, 
+                        clientThread, (void*)clientConn),"pthread_create()");
     }
 
     // Never reaches
