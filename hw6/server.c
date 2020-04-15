@@ -71,6 +71,7 @@ message_queue outMessages;
 // Function prototypes
 void checkNull(void* arrayPtr, const char* errorMsg);
 void errorCheck(int errorCode, char* message);
+void p_errorCheck(int errorCode, char* message);
 void parseInput(int argc, char** argv);
 void p_init_userlist(void);
 void p_init_msgqueue(void);
@@ -83,7 +84,7 @@ void* clientThread(void* fd);
 
 int DS_appendMessage(dynamic_string* dest, const char* message);
 int enqueueMessage(char* message, client_info* sender);
-int removeMessage();
+int removeMessage(void);
 int addUser(client_info* newUser);
 int removeUser(client_info* user);
 int serverAnnouncement(char* message, char* username);
@@ -412,7 +413,7 @@ int enqueueMessage(char* message, client_info* sender)
 // This is to be used in conjunction with a function
 // that already has acquired the lock for the message queue
 // Otherwise, risk corrupting the queue
-int removeMessage()
+int removeMessage(void)
 {
     if(outMessages.length <= 0)
     {
@@ -614,14 +615,11 @@ int sendUserList(int dest)
     return 0;
 }
 
-// Functions for the threads
+// Functions for the threads (thread is created in detached state)
 // Thread for reading from message queue and broadcast 
-// whenever there is a message
+// whenever there is a message 
 void* broadcastThread(void* args)
 {
-    // Mark the thread as detached so we dont have to wait for it
-    // Auto cleanup after thread exits (if it ever does)
-    p_errorCheck(pthread_detach(pthread_self()), "pthread_detach()");
 
     while(1)
     {
@@ -672,11 +670,9 @@ void* broadcastThread(void* args)
 }
 
 // fd here should be the client socket from Accept()
-// client function
+// client function (the thread is created in detach state)
 void* clientThread(void* fd)
 {
-    // First mark the thread as detached
-    p_errorCheck(pthread_detach(pthread_self()), "pthread_detach()");
 
     int clientSock = *((int*)fd);
 
@@ -814,12 +810,18 @@ int main(int argc, char* argv[])
     p_init_userlist();
     p_init_msgqueue();
 
+    // Thread attribute for making a detach thread
+    pthread_attr_t detachAttr;
+    p_errorCheck(pthread_attr_init(&detachAttr), "pthread_attr_init()");
+    p_errorCheck(pthread_attr_setdetachstate(&detachAttr, 
+                    PTHREAD_CREATE_DETACHED), "pthread_attr_setdetachstate()");
+
     // Start up the thread for broadcasting
     // Note: We dont need the thread id since we setting the thread to detach
     // No need for the main to join it.
     pthread_t broadcast_tid;
-    p_errorCheck(pthread_create(&broadcast_tid, NULL, broadcastThread, NULL),
-                                                            "pthread_create" );
+    p_errorCheck(pthread_create(&broadcast_tid, &detachAttr, 
+                                    broadcastThread, NULL), "pthread_create" );
 
     // Setup the socket for server
     // Variables
@@ -875,12 +877,13 @@ int main(int argc, char* argv[])
         printf("Main(): Client connected, creating client thread\n");
 
         pthread_t client_tid; // not actually used
-        p_errorCheck(pthread_create(&client_tid, NULL, 
+        p_errorCheck(pthread_create(&client_tid, &detachAttr, 
                         clientThread, (void*)clientConn),"pthread_create()");
     }
 
     // Never reaches
-    errorCheck(close(serverSocket), "failed close()");            
+    errorCheck(close(serverSocket), "failed close()");      
+    p_errorCheck(pthread_attr_destroy(&detachAttr), "pthread_attr_destroy()");
     p_free_userlist();
     p_free_msgqueue();
     return 0;
