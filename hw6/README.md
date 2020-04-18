@@ -30,7 +30,9 @@ Client attempts to connect to 127.0.0.1 on port 8920
 # Fundamental changes
 1.) I made both the client and server able to handle any length of messages, whether
 they are sending or receiving. Previously it was restricted to the size of the buffer
-Now, changing the buffer size 
+Now, changing the buffer size.
+2.) Removed signal handling
+3.) Changed server to manage messages from multiple clients rather than act like a client
 
 # Client changes
 I added logic for quitting when user types in "QUIT"
